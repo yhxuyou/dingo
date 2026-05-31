@@ -1,0 +1,1000 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数据质量检测平台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+    <script>
+    tailwind.config = {
+        theme: {
+            extend: {
+                fontFamily: {
+                    display: ['Space Grotesk', 'Noto Sans SC', 'sans-serif'],
+                    body: ['Noto Sans SC', 'sans-serif'],
+                },
+                colors: {
+                    brand: {
+                        50: '#f0f4ff',
+                        100: '#dbe4ff',
+                        200: '#bac8ff',
+                        300: '#91a7ff',
+                        400: '#748ffc',
+                        500: '#5c7cfa',
+                        600: '#4c6ef5',
+                        700: '#4263eb',
+                        800: '#3b5bdb',
+                        900: '#364fc7',
+                    },
+                    surface: {
+                        0: '#0a0e1a',
+                        50: '#0f1424',
+                        100: '#151b30',
+                        200: '#1c2440',
+                        300: '#243052',
+                        400: '#2e3d68',
+                    },
+                    mint: '#38d9a9',
+                    coral: '#ff6b6b',
+                    amber: '#fcc419',
+                    sky: '#339af0',
+                }
+            }
+        }
+    }
+    </script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; background: #0a0e1a; color: #c1c9d8; font-family: 'Noto Sans SC', sans-serif; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: #151b30; }
+        ::-webkit-scrollbar-thumb { background: #2e3d68; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4c6ef5; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideIn { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: translateX(0); } }
+        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 8px rgba(92,124,250,0.3); } 50% { box-shadow: 0 0 20px rgba(92,124,250,0.6); } }
+        @keyframes progress-stripe { 0% { background-position: 0 0; } 100% { background-position: 40px 0; } }
+
+        .fade-in { animation: fadeIn 0.4s ease-out; }
+        .slide-in { animation: slideIn 0.3s ease-out; }
+        .pulse-glow { animation: pulse-glow 2s ease-in-out infinite; }
+
+        .progress-bar-striped {
+            background-image: linear-gradient(45deg, rgba(255,255,255,0.1) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.1) 75%, transparent 75%, transparent);
+            background-size: 40px 40px;
+            animation: progress-stripe 1s linear infinite;
+        }
+
+        .glass-card {
+            background: linear-gradient(135deg, rgba(21,27,48,0.9), rgba(28,36,64,0.7));
+            border: 1px solid rgba(92,124,250,0.15);
+            backdrop-filter: blur(12px);
+        }
+
+        .glass-card:hover { border-color: rgba(92,124,250,0.3); }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #4c6ef5, #5c7cfa);
+            transition: all 0.2s;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #4263eb, #4c6ef5);
+            box-shadow: 0 4px 16px rgba(76,110,245,0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #e03131, #ff6b6b);
+            transition: all 0.2s;
+        }
+        .btn-danger:hover {
+            box-shadow: 0 4px 16px rgba(224,49,49,0.4);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            border: 1px solid rgba(92,124,250,0.3);
+            transition: all 0.2s;
+        }
+        .btn-ghost:hover {
+            background: rgba(92,124,250,0.1);
+            border-color: rgba(92,124,250,0.5);
+        }
+
+        .input-field {
+            background: rgba(15,20,36,0.8);
+            border: 1px solid rgba(92,124,250,0.2);
+            transition: all 0.2s;
+        }
+        .input-field:focus {
+            outline: none;
+            border-color: #5c7cfa;
+            box-shadow: 0 0 0 3px rgba(92,124,250,0.15);
+        }
+
+        .sidebar-item {
+            transition: all 0.2s;
+            position: relative;
+        }
+        .sidebar-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 3px;
+            height: 0;
+            background: #5c7cfa;
+            border-radius: 0 2px 2px 0;
+            transition: height 0.2s;
+        }
+        .sidebar-item:hover::before, .sidebar-item.active::before {
+            height: 60%;
+        }
+        .sidebar-item.active {
+            background: rgba(92,124,250,0.1);
+            color: #91a7ff;
+        }
+
+        .stat-card {
+            position: relative;
+            overflow: hidden;
+        }
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle, rgba(92,124,250,0.06) 0%, transparent 70%);
+            pointer-events: none;
+        }
+
+        .table-row { transition: background 0.15s; }
+        .table-row:hover { background: rgba(92,124,250,0.06); }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            letter-spacing: 0.02em;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            backdrop-filter: blur(4px);
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: #151b30;
+            border: 1px solid rgba(92,124,250,0.2);
+            border-radius: 16px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 85vh;
+            overflow-y: auto;
+        }
+
+        .dimension-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .dimension-tag:hover { transform: scale(1.05); }
+
+        .score-ring {
+            position: relative;
+            width: 120px;
+            height: 120px;
+        }
+        .score-ring svg { transform: rotate(-90deg); }
+        .score-ring-text {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+const API = '';
+const fetchJSON = async (url, opts = {}) => {
+    const res = await fetch(API + url, {
+        headers: { 'Content-Type': 'application/json', ...opts.headers },
+        ...opts,
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+};
+
+const STATUS_MAP = {
+    pending: { label: '待执行', color: 'bg-surface-300 text-gray-300' },
+    running: { label: '执行中', color: 'bg-sky/20 text-sky' },
+    completed: { label: '已完成', color: 'bg-mint/20 text-mint' },
+    cancelled: { label: '已取消', color: 'bg-amber/20 text-amber' },
+    failed: { label: '失败', color: 'bg-coral/20 text-coral' },
+};
+
+const DS_TYPE_MAP = {
+    local_file: { label: '本地文件', icon: '📄' },
+    mysql: { label: 'MySQL', icon: '🐬' },
+    postgresql: { label: 'PostgreSQL', icon: '🐘' },
+    oracle: { label: 'Oracle', icon: '🔶' },
+    sqlserver: { label: 'SQL Server', icon: '🔷' },
+    sqlite: { label: 'SQLite', icon: '📦' },
+};
+
+const DIMENSION_COLORS = {
+    QUALITY_BAD_EFFECTIVENESS: { bg: 'rgba(252,196,25,0.12)', text: '#fcc419', border: 'rgba(252,196,25,0.3)' },
+    QUALITY_BAD_FLUENCY: { bg: 'rgba(51,154,240,0.12)', text: '#339af0', border: 'rgba(51,154,240,0.3)' },
+    QUALITY_BAD_UNDERSTANDABILITY: { bg: 'rgba(92,124,250,0.12)', text: '#748ffc', border: 'rgba(92,124,250,0.3)' },
+    QUALITY_BAD_COMPLETENESS: { bg: 'rgba(56,217,169,0.12)', text: '#38d9a9', border: 'rgba(56,217,169,0.3)' },
+    QUALITY_BAD_SIMILARITY: { bg: 'rgba(190,75,219,0.12)', text: '#be4bdb', border: 'rgba(190,75,219,0.3)' },
+    QUALITY_BAD_SECURITY: { bg: 'rgba(255,107,107,0.12)', text: '#ff6b6b', border: 'rgba(255,107,107,0.3)' },
+    QUALITY_BAD_RELEVANCE: { bg: 'rgba(255,146,43,0.12)', text: '#ff922b', border: 'rgba(255,146,43,0.3)' },
+};
+
+function getDimColor(dim) {
+    return DIMENSION_COLORS[dim] || { bg: 'rgba(92,124,250,0.12)', text: '#748ffc', border: 'rgba(92,124,250,0.3)' };
+}
+
+function ScoreRing({ score, size = 120 }) {
+    const r = (size - 12) / 2;
+    const c = 2 * Math.PI * r;
+    const pct = Math.min(Math.max(score || 0, 0), 100);
+    const offset = c - (pct / 100) * c;
+    const color = pct >= 80 ? '#38d9a9' : pct >= 60 ? '#fcc419' : '#ff6b6b';
+    return (
+        <div className="score-ring" style={{ width: size, height: size }}>
+            <svg width={size} height={size}>
+                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(92,124,250,0.1)" strokeWidth="6" />
+                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={color} strokeWidth="6"
+                    strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
+                    style={{ transition: 'stroke-dashoffset 1s ease' }} />
+            </svg>
+            <div className="score-ring-text">
+                <span style={{ fontSize: size * 0.28, fontWeight: 700, color, fontFamily: 'Space Grotesk' }}>{pct.toFixed(1)}</span>
+                <span style={{ fontSize: size * 0.1, color: '#6b7a99' }}>质量评分</span>
+            </div>
+        </div>
+    );
+}
+
+function Modal({ open, onClose, title, children }) {
+    if (!open) return null;
+    return (
+        <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+            <div className="modal-content fade-in">
+                <div className="flex items-center justify-between p-5 border-b border-brand-800/30">
+                    <h3 className="font-display text-lg font-semibold text-white">{title}</h3>
+                    <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors text-xl leading-none">&times;</button>
+                </div>
+                <div className="p-5">{children}</div>
+            </div>
+        </div>
+    );
+}
+
+function DashboardPage() {
+    const [data, setData] = useState(null);
+    useEffect(() => {
+        fetchJSON('/api/dashboard').then(setData).catch(console.error);
+    }, []);
+
+    if (!data) return <div className="flex items-center justify-center h-64"><div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" /></div>;
+
+    const stats = [
+        { label: '数据源', value: data.datasource_count, icon: '🗄️', color: 'from-sky/20 to-sky/5' },
+        { label: '检测任务', value: data.task_count, icon: '🔍', color: 'from-mint/20 to-mint/5' },
+        { label: '自定义规则', value: data.custom_rule_count, icon: '⚙️', color: 'from-amber/20 to-amber/5' },
+        { label: '内置规则', value: data.builtin_rule_count, icon: '📋', color: 'from-brand-500/20 to-brand-500/5' },
+    ];
+
+    return (
+        <div className="fade-in">
+            <h1 className="font-display text-2xl font-bold text-white mb-6">控制台</h1>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                {stats.map((s, i) => (
+                    <div key={i} className="stat-card glass-card rounded-xl p-5" style={{ animationDelay: `${i * 80}ms` }}>
+                        <div className="flex items-center gap-3 mb-3">
+                            <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${s.color} flex items-center justify-center text-lg`}>{s.icon}</div>
+                            <span className="text-sm text-gray-400">{s.label}</span>
+                        </div>
+                        <div className="font-display text-3xl font-bold text-white">{s.value}</div>
+                    </div>
+                ))}
+            </div>
+
+            <h2 className="font-display text-lg font-semibold text-white mb-4">质量维度分布</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {data.dimensions.map((d, i) => {
+                    const c = getDimColor(d.name);
+                    return (
+                        <div key={i} className="glass-card rounded-xl p-4 slide-in" style={{ animationDelay: `${i * 60}ms` }}>
+                            <div className="flex items-center gap-2 mb-2">
+                                <div className="w-2 h-2 rounded-full" style={{ background: c.text }} />
+                                <span className="text-sm font-medium" style={{ color: c.text }}>
+                                    {d.name.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}
+                                </span>
+                            </div>
+                            <div className="font-display text-2xl font-bold text-white">{d.count}</div>
+                            <div className="text-xs text-gray-500 mt-1">条规则</div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
+}
+
+function DatasourcesPage() {
+    const [sources, setSources] = useState([]);
+    const [modal, setModal] = useState(null);
+    const [browseData, setBrowseData] = useState(null);
+    const [browseDsId, setBrowseDsId] = useState(null);
+    const [browsePage, setBrowsePage] = useState(1);
+    const [browseTable, setBrowseTable] = useState('');
+    const [testResult, setTestResult] = useState(null);
+    const [form, setForm] = useState({ name: '', type: 'local_file', config: {} });
+    const [uploadResult, setUploadResult] = useState(null);
+
+    const load = () => fetchJSON('/api/datasources').then(setSources).catch(console.error);
+    useEffect(() => { load(); }, []);
+
+    const handleUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(API + '/api/datasources/upload', { method: 'POST', body: fd });
+        const data = await res.json();
+        setUploadResult(data);
+        setForm(f => ({ ...f, type: 'local_file', config: { ...f.config, file_path: data.file_path, format: data.format } }));
+    };
+
+    const handleSave = async () => {
+        if (modal === 'add') {
+            await fetchJSON('/api/datasources', { method: 'POST', body: JSON.stringify(form) });
+        } else if (modal === 'edit') {
+            await fetchJSON(`/api/datasources/${form.id}`, { method: 'PUT', body: JSON.stringify({ name: form.name, config: form.config }) });
+        }
+        setModal(null);
+        setForm({ name: '', type: 'local_file', config: {} });
+        setUploadResult(null);
+        load();
+    };
+
+    const handleTest = async (id) => {
+        setTestResult(null);
+        const res = await fetchJSON(`/api/datasources/${id}/test`, { method: 'POST' });
+        setTestResult(res);
+    };
+
+    const handleBrowse = async (id, page = 1, table = '') => {
+        setBrowseDsId(id);
+        setBrowsePage(page);
+        const res = await fetchJSON(`/api/datasources/${id}/browse?page=${page}&page_size=20${table ? '&table=' + table : ''}`);
+        setBrowseData(res);
+    };
+
+    const handleDelete = async (id) => {
+        if (!confirm('确定删除此数据源？')) return;
+        await fetchJSON(`/api/datasources/${id}`, { method: 'DELETE' });
+        load();
+    };
+
+    const dbFields = (type) => type !== 'local_file';
+
+    return (
+        <div className="fade-in">
+            <div className="flex items-center justify-between mb-6">
+                <h1 className="font-display text-2xl font-bold text-white">数据源管理</h1>
+                <button onClick={() => { setModal('add'); setForm({ name: '', type: 'local_file', config: {} }); setUploadResult(null); }}
+                    className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 新增数据源</button>
+            </div>
+
+            {testResult && (
+                <div className={`glass-card rounded-xl p-4 mb-4 ${testResult.success ? 'border-mint/30' : 'border-coral/30'}`}>
+                    <div className="flex items-center gap-2 mb-2">
+                        <span className={testResult.success ? 'text-mint' : 'text-coral'}>{testResult.success ? '✓' : '✗'}</span>
+                        <span className="text-white font-medium">{testResult.message}</span>
+                    </div>
+                    {testResult.tables && testResult.tables.length > 0 && (
+                        <div className="text-sm text-gray-400">
+                            <span className="text-gray-300">数据表：</span>
+                            {testResult.tables.map((t, i) => (
+                                <span key={i} className="badge bg-brand-800/50 text-brand-300 ml-1 cursor-pointer" onClick={() => { setBrowseTable(t); handleBrowse(browseDsId, 1, t); }}>{t}</span>
+                            ))}
+                        </div>
+                    )}
+                    <button onClick={() => setTestResult(null)} className="text-xs text-gray-500 mt-2 hover:text-gray-300">关闭</button>
+                </div>
+            )}
+
+            <div className="grid gap-3">
+                {sources.map(ds => {
+                    const dt = DS_TYPE_MAP[ds.type] || { label: ds.type, icon: '📁' };
+                    return (
+                        <div key={ds.id} className="glass-card rounded-xl p-4 slide-in">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <span className="text-2xl">{dt.icon}</span>
+                                    <div>
+                                        <div className="text-white font-medium">{ds.name}</div>
+                                        <div className="text-xs text-gray-500">{dt.label} · 创建于 {new Date(ds.created_at).toLocaleDateString()}</div>
+                                    </div>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <button onClick={() => handleTest(ds.id)} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs">测试连接</button>
+                                    <button onClick={() => handleBrowse(ds.id)} className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs">浏览数据</button>
+                                    <button onClick={() => { setModal('edit'); setForm({ id: ds.id, name: ds.name, type: ds.type, config: ds.config }); }} className="btn-ghost text-amber px-3 py-1.5 rounded-lg text-xs">编辑</button>
+                                    <button onClick={() => handleDelete(ds.id)} className="btn-ghost text-coral px-3 py-1.5 rounded-lg text-xs">删除</button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+                {sources.length === 0 && <div className="text-center text-gray-500 py-12">暂无数据源，点击右上角新增</div>}
+            </div>
+
+            {browseData && (
+                <Modal open={!!browseData} onClose={() => { setBrowseData(null); setBrowseDsId(null); }} title="数据浏览">
+                    <div className="overflow-x-auto">
+                        <div className="text-sm text-gray-400 mb-3">共 {browseData.total} 条 · 第 {browseData.page} 页</div>
+                        {browseData.columns.length > 0 ? (
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-brand-800/30">
+                                        {browseData.columns.map(c => <th key={c} className="text-left py-2 px-3 text-gray-400 font-medium whitespace-nowrap">{c}</th>)}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {browseData.rows.map((row, i) => (
+                                        <tr key={i} className="table-row border-b border-brand-800/10">
+                                            {browseData.columns.map(c => <td key={c} className="py-2 px-3 text-gray-300 max-w-xs truncate">{String(row[c] ?? '')}</td>)}
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : <div className="text-gray-500 text-center py-8">无数据</div>}
+                        <div className="flex justify-center gap-2 mt-4">
+                            <button disabled={browsePage <= 1} onClick={() => handleBrowse(browseDsId, browsePage - 1, browseTable)}
+                                className="btn-ghost text-brand-300 px-3 py-1 rounded text-xs disabled:opacity-30">上一页</button>
+                            <button disabled={browsePage * 20 >= browseData.total} onClick={() => handleBrowse(browseDsId, browsePage + 1, browseTable)}
+                                className="btn-ghost text-brand-300 px-3 py-1 rounded text-xs disabled:opacity-30">下一页</button>
+                        </div>
+                    </div>
+                </Modal>
+            )}
+
+            <Modal open={!!modal} onClose={() => { setModal(null); setUploadResult(null); }} title={modal === 'add' ? '新增数据源' : '编辑数据源'}>
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">名称</label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
+                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="输入数据源名称" />
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">类型</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.type}
+                            onChange={e => setForm(f => ({ ...f, type: e.target.value, config: {} }))} disabled={modal === 'edit'}>
+                            {Object.entries(DS_TYPE_MAP).map(([k, v]) => <option key={k} value={k}>{v.icon} {v.label}</option>)}
+                        </select>
+                    </div>
+
+                    {form.type === 'local_file' ? (
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">上传文件</label>
+                            <input type="file" accept=".json,.jsonl,.csv,.xlsx,.xls,.parquet,.txt" onChange={handleUpload}
+                                className="block w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-brand-800/50 file:text-brand-300 hover:file:bg-brand-700/50" />
+                            {uploadResult && <div className="text-xs text-mint mt-2">✓ 已上传: {uploadResult.filename} ({(uploadResult.size / 1024).toFixed(1)} KB)</div>}
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            {form.type !== 'sqlite' && (
+                                <>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">主机</label>
+                                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.config.host || ''}
+                                                onChange={e => setForm(f => ({ ...f, config: { ...f.config, host: e.target.value } }))} placeholder="localhost" />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">端口</label>
+                                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.config.port || ''}
+                                                onChange={e => setForm(f => ({ ...f, config: { ...f.config, port: e.target.value } }))} placeholder="3306" />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">用户名</label>
+                                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.config.username || ''}
+                                                onChange={e => setForm(f => ({ ...f, config: { ...f.config, username: e.target.value } }))} />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs text-gray-400 mb-1">密码</label>
+                                            <input type="password" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.config.password || ''}
+                                                onChange={e => setForm(f => ({ ...f, config: { ...f.config, password: e.target.value } }))} />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">数据库</label>
+                                <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.config.database || ''}
+                                    onChange={e => setForm(f => ({ ...f, config: { ...f.config, database: e.target.value } }))} />
+                            </div>
+                            <div>
+                                <label className="block text-xs text-gray-400 mb-1">SQL 查询</label>
+                                <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono" rows={3}
+                                    value={form.config.query || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, query: e.target.value } }))}
+                                    placeholder="SELECT * FROM table_name" />
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex justify-end gap-3 pt-2">
+                        <button onClick={() => setModal(null)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                        <button onClick={handleSave} className="btn-primary text-white px-4 py-2 rounded-lg text-sm">保存</button>
+                    </div>
+                </div>
+            </Modal>
+        </div>
+    );
+}
+
+function RulesPage() {
+    const [dimensions, setDimensions] = useState([]);
+    const [activeDim, setActiveDim] = useState(null);
+    const [rules, setRules] = useState([]);
+    const [search, setSearch] = useState('');
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ name: '', metric_type: '', group: 'custom', description: '', config: {} });
+    const [configText, setConfigText] = useState('{}');
+
+    useEffect(() => {
+        fetchJSON('/api/rules/dimensions').then(setDimensions).catch(console.error);
+    }, []);
+
+    const loadRules = useCallback(() => {
+        const params = new URLSearchParams();
+        if (activeDim) params.set('dimension', activeDim);
+        if (search) params.set('search', search);
+        fetchJSON(`/api/rules?${params}`).then(setRules).catch(console.error);
+    }, [activeDim, search]);
+
+    useEffect(() => { loadRules(); }, [loadRules]);
+
+    const handleSave = async () => {
+        try {
+            const config = JSON.parse(configText);
+            await fetchJSON('/api/rules', { method: 'POST', body: JSON.stringify({ ...form, config }) });
+            setModal(false);
+            setForm({ name: '', metric_type: '', group: 'custom', description: '', config: {} });
+            setConfigText('{}');
+            loadRules();
+        } catch (e) {
+            alert('配置 JSON 格式错误: ' + e.message);
+        }
+    };
+
+    const handleDelete = async (id) => {
+        if (!confirm('确定删除此规则？')) return;
+        await fetchJSON(`/api/rules/${id}`, { method: 'DELETE' });
+        loadRules();
+    };
+
+    return (
+        <div className="fade-in">
+            <div className="flex items-center justify-between mb-6">
+                <h1 className="font-display text-2xl font-bold text-white">规则管理</h1>
+                <button onClick={() => setModal(true)} className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 自定义规则</button>
+            </div>
+
+            <div className="flex items-center gap-3 mb-4">
+                <input className="input-field rounded-lg px-3 py-2 text-white text-sm flex-1" placeholder="搜索规则..."
+                    value={search} onChange={e => setSearch(e.target.value)} />
+                <button onClick={() => setActiveDim(null)} className={`dimension-tag ${!activeDim ? 'bg-brand-600/30 text-brand-200 border border-brand-500/40' : 'bg-surface-200 text-gray-400 border border-transparent'}`}
+                    >全部</button>
+                {dimensions.map(d => {
+                    const c = getDimColor(d.name);
+                    const isActive = activeDim === d.name;
+                    return (
+                        <button key={d.name} onClick={() => setActiveDim(isActive ? null : d.name)}
+                            className="dimension-tag" style={{
+                                background: isActive ? c.bg : 'rgba(28,36,64,0.5)',
+                                color: isActive ? c.text : '#6b7a99',
+                                border: `1px solid ${isActive ? c.border : 'transparent'}`,
+                            }}>
+                            {d.name.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}
+                            <span className="opacity-60">({d.count})</span>
+                        </button>
+                    );
+                })}
+            </div>
+
+            <div className="grid gap-2">
+                {rules.map((r, i) => {
+                    const c = getDimColor(r.metric_type);
+                    return (
+                        <div key={`${r.id}-${i}`} className="glass-card rounded-xl p-4 slide-in" style={{ animationDelay: `${i * 30}ms` }}>
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <div className="w-2 h-8 rounded-full" style={{ background: c.text }} />
+                                    <div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-white font-medium font-display">{r.name}</span>
+                                            {r.is_builtin ? (
+                                                <span className="badge bg-brand-800/40 text-brand-300">内置</span>
+                                            ) : (
+                                                <span className="badge bg-amber/15 text-amber">自定义</span>
+                                            )}
+                                            <span className="badge" style={{ background: c.bg, color: c.text }}>
+                                                {r.metric_type.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}
+                                            </span>
+                                        </div>
+                                        {r.description && <div className="text-xs text-gray-500 mt-1 max-w-lg truncate">{r.description}</div>}
+                                    </div>
+                                </div>
+                                {!r.is_builtin && (
+                                    <button onClick={() => handleDelete(r.id)} className="btn-ghost text-coral px-3 py-1 rounded text-xs">删除</button>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+                {rules.length === 0 && <div className="text-center text-gray-500 py-12">无匹配规则</div>}
+            </div>
+
+            <Modal open={modal} onClose={() => setModal(false)} title="创建自定义规则">
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">规则名称</label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
+                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="如: RuleMyCustomCheck" />
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">质量维度</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.metric_type}
+                            onChange={e => setForm(f => ({ ...f, metric_type: e.target.value }))}>
+                            <option value="">选择维度</option>
+                            {dimensions.map(d => <option key={d.name} value={d.name}>{d.name.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">描述</label>
+                        <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" rows={2}
+                            value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">规则配置 (JSON)</label>
+                        <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono" rows={4}
+                            value={configText} onChange={e => setConfigText(e.target.value)} />
+                    </div>
+                    <div className="flex justify-end gap-3 pt-2">
+                        <button onClick={() => setModal(false)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                        <button onClick={handleSave} className="btn-primary text-white px-4 py-2 rounded-lg text-sm">创建</button>
+                    </div>
+                </div>
+            </Modal>
+        </div>
+    );
+}
+
+function TasksPage() {
+    const [tasks, setTasks] = useState([]);
+    const [datasources, setDatasources] = useState([]);
+    const [rules, setRules] = useState([]);
+    const [modal, setModal] = useState(false);
+    const [form, setForm] = useState({ name: '', datasource_id: '', rule_ids: [], field_mapping: {} });
+    const [reportData, setReportData] = useState(null);
+    const [pollId, setPollId] = useState(null);
+
+    const load = useCallback(() => {
+        Promise.all([
+            fetchJSON('/api/tasks'),
+            fetchJSON('/api/datasources'),
+            fetchJSON('/api/rules'),
+        ]).then(([t, ds, r]) => { setTasks(t); setDatasources(ds); setRules(r); }).catch(console.error);
+    }, []);
+
+    useEffect(() => { load(); }, [load]);
+
+    useEffect(() => {
+        const hasRunning = tasks.some(t => t.status === 'running');
+        if (hasRunning && !pollId) {
+            const id = setInterval(load, 2000);
+            setPollId(id);
+        } else if (!hasRunning && pollId) {
+            clearInterval(pollId);
+            setPollId(null);
+        }
+    }, [tasks, pollId, load]);
+
+    const handleCreate = async () => {
+        await fetchJSON('/api/tasks', {
+            method: 'POST',
+            body: JSON.stringify({ ...form, datasource_id: parseInt(form.datasource_id) }),
+        });
+        setModal(false);
+        setForm({ name: '', datasource_id: '', rule_ids: [], field_mapping: {} });
+        load();
+    };
+
+    const handleStart = async (id) => {
+        await fetchJSON(`/api/tasks/${id}/start`, { method: 'POST' });
+        load();
+    };
+
+    const handleCancel = async (id) => {
+        await fetchJSON(`/api/tasks/${id}/cancel`, { method: 'POST' });
+        load();
+    };
+
+    const handleDelete = async (id) => {
+        if (!confirm('确定删除此任务？')) return;
+        await fetchJSON(`/api/tasks/${id}`, { method: 'DELETE' });
+        load();
+    };
+
+    const handleReport = async (id) => {
+        const res = await fetchJSON(`/api/tasks/${id}/report`);
+        setReportData(res);
+    };
+
+    const toggleRule = (rid) => {
+        setForm(f => ({
+            ...f,
+            rule_ids: f.rule_ids.includes(rid) ? f.rule_ids.filter(id => id !== rid) : [...f.rule_ids, rid],
+        }));
+    };
+
+    return (
+        <div className="fade-in">
+            <div className="flex items-center justify-between mb-6">
+                <h1 className="font-display text-2xl font-bold text-white">检测任务</h1>
+                <button onClick={() => setModal(true)} className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 创建任务</button>
+            </div>
+
+            <div className="grid gap-3">
+                {tasks.map((t, i) => {
+                    const st = STATUS_MAP[t.status] || STATUS_MAP.pending;
+                    return (
+                        <div key={t.id} className="glass-card rounded-xl p-5 slide-in" style={{ animationDelay: `${i * 50}ms` }}>
+                            <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-3">
+                                    <div className="font-display text-white font-semibold text-lg">{t.name}</div>
+                                    <span className={`badge ${st.color}`}>{st.label}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    {t.status === 'pending' && (
+                                        <button onClick={() => handleStart(t.id)} className="btn-primary text-white px-3 py-1.5 rounded-lg text-xs">启动</button>
+                                    )}
+                                    {t.status === 'running' && (
+                                        <button onClick={() => handleCancel(t.id)} className="btn-danger text-white px-3 py-1.5 rounded-lg text-xs">取消</button>
+                                    )}
+                                    {t.status === 'completed' && (
+                                        <>
+                                            <button onClick={() => handleReport(t.id)} className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs">查看报告</button>
+                                            <a href={API + `/api/tasks/${t.id}/download`} className="btn-ghost text-sky px-3 py-1.5 rounded-lg text-xs inline-block">下载问题数据</a>
+                                        </>
+                                    )}
+                                    <button onClick={() => handleDelete(t.id)} className="btn-ghost text-coral px-3 py-1.5 rounded-lg text-xs">删除</button>
+                                </div>
+                            </div>
+
+                            {t.status === 'running' && (
+                                <div className="mb-3">
+                                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                                        <span>进度</span>
+                                        <span>{t.processed}/{t.total} ({t.progress.toFixed(1)}%)</span>
+                                    </div>
+                                    <div className="h-2 bg-surface-300 rounded-full overflow-hidden">
+                                        <div className="h-full bg-gradient-to-r from-brand-600 to-brand-400 rounded-full progress-bar-striped"
+                                            style={{ width: `${t.progress}%`, transition: 'width 0.5s ease' }} />
+                                    </div>
+                                </div>
+                            )}
+
+                            {t.status === 'completed' && t.score != null && (
+                                <div className="flex items-center gap-6">
+                                    <ScoreRing score={t.score} size={80} />
+                                    <div className="grid grid-cols-3 gap-4">
+                                        <div><div className="text-xs text-gray-500">总数据</div><div className="font-display text-white font-bold">{t.total}</div></div>
+                                        <div><div className="text-xs text-gray-500">合格</div><div className="font-display text-mint font-bold">{t.num_good}</div></div>
+                                        <div><div className="text-xs text-gray-500">问题</div><div className="font-display text-coral font-bold">{t.num_bad}</div></div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {t.error_message && (
+                                <div className="text-xs text-coral bg-coral/10 rounded-lg px-3 py-2 mt-2">{t.error_message}</div>
+                            )}
+                        </div>
+                    );
+                })}
+                {tasks.length === 0 && <div className="text-center text-gray-500 py-12">暂无任务，点击右上角创建</div>}
+            </div>
+
+            <Modal open={modal} onClose={() => setModal(false)} title="创建检测任务">
+                <div className="space-y-4">
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">任务名称</label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
+                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="输入任务名称" />
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">数据源</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.datasource_id}
+                            onChange={e => setForm(f => ({ ...f, datasource_id: e.target.value }))}>
+                            <option value="">选择数据源</option>
+                            {datasources.map(ds => <option key={ds.id} value={ds.id}>{ds.name} ({DS_TYPE_MAP[ds.type]?.label})</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">选择规则</label>
+                        <div className="max-h-60 overflow-y-auto space-y-1 p-2 bg-surface-0 rounded-lg">
+                            {rules.map((r, i) => {
+                                const c = getDimColor(r.metric_type);
+                                const checked = form.rule_ids.includes(r.id);
+                                return (
+                                    <label key={`${r.id}-${i}`} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-brand-800/30' : 'hover:bg-surface-200'}`}>
+                                        <input type="checkbox" checked={checked} onChange={() => toggleRule(r.id)}
+                                            className="rounded border-brand-600 bg-surface-0 text-brand-500 focus:ring-brand-500" />
+                                        <span className="text-sm text-white">{r.name}</span>
+                                        <span className="badge ml-auto" style={{ background: c.bg, color: c.text, fontSize: '0.6rem' }}>
+                                            {r.metric_type.replace('QUALITY_BAD_', '').substring(0, 10)}
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-1">已选 {form.rule_ids.length} 条规则</div>
+                    </div>
+                    <div className="flex justify-end gap-3 pt-2">
+                        <button onClick={() => setModal(false)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                        <button onClick={handleCreate} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
+                            disabled={!form.name || !form.datasource_id || form.rule_ids.length === 0}>创建</button>
+                    </div>
+                </div>
+            </Modal>
+
+            <Modal open={!!reportData} onClose={() => setReportData(null)} title="检测报告">
+                {reportData && (
+                    <div className="space-y-5">
+                        <div className="flex items-center gap-6">
+                            <ScoreRing score={reportData.score || 0} size={100} />
+                            <div className="grid grid-cols-3 gap-4">
+                                <div><div className="text-xs text-gray-500">总数据</div><div className="font-display text-white font-bold text-xl">{reportData.total}</div></div>
+                                <div><div className="text-xs text-gray-500">合格</div><div className="font-display text-mint font-bold text-xl">{reportData.num_good}</div></div>
+                                <div><div className="text-xs text-gray-500">问题</div><div className="font-display text-coral font-bold text-xl">{reportData.num_bad}</div></div>
+                            </div>
+                        </div>
+
+                        {reportData.type_ratio && Object.keys(reportData.type_ratio).length > 0 && (
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-300 mb-2">问题类型分布</h4>
+                                <div className="space-y-2">
+                                    {Object.entries(reportData.type_ratio).map(([field, types]) => (
+                                        <div key={field} className="bg-surface-0 rounded-lg p-3">
+                                            <div className="text-xs text-gray-400 mb-2">字段: {field}</div>
+                                            {Object.entries(types).map(([type, ratio]) => {
+                                                const pct = (ratio * 100).toFixed(2);
+                                                return (
+                                                    <div key={type} className="flex items-center gap-2 mb-1">
+                                                        <div className="flex-1 h-4 bg-surface-300 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-gradient-to-r from-coral to-amber rounded-full" style={{ width: `${Math.min(pct * 5, 100)}%` }} />
+                                                        </div>
+                                                        <span className="text-xs text-gray-400 w-48 truncate">{type}</span>
+                                                        <span className="text-xs text-coral font-mono w-16 text-right">{pct}%</span>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        {reportData.bad_data && reportData.bad_data.length > 0 && (
+                            <div>
+                                <h4 className="text-sm font-medium text-gray-300 mb-2">问题数据 (前 {reportData.bad_data.length} 条)</h4>
+                                <div className="max-h-60 overflow-y-auto space-y-2">
+                                    {reportData.bad_data.map((item, i) => (
+                                        <div key={i} className="bg-surface-0 rounded-lg p-3 text-xs">
+                                            <div className="text-coral mb-1">
+                                                {item.dingo_result?.eval_details && Object.entries(item.dingo_result.eval_details).map(([field, details]) =>
+                                                    details.map((d, j) => <span key={j} className="badge bg-coral/15 text-coral mr-1">{d.metric}: {d.label?.join(', ')}</span>)
+                                                )}
+                                            </div>
+                                            <div className="text-gray-400 truncate">
+                                                {item.content || item.prompt || JSON.stringify(item).substring(0, 120)}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </Modal>
+        </div>
+    );
+}
+
+function App() {
+    const [page, setPage] = useState('dashboard');
+
+    const navItems = [
+        { id: 'dashboard', label: '控制台', icon: '◉' },
+        { id: 'datasources', label: '数据源', icon: '🗄️' },
+        { id: 'rules', label: '规则管理', icon: '⚖️' },
+        { id: 'tasks', label: '检测任务', icon: '🔍' },
+    ];
+
+    return (
+        <div className="flex h-screen overflow-hidden">
+            <aside className="w-56 flex-shrink-0 bg-surface-50 border-r border-brand-800/20 flex flex-col">
+                <div className="p-5 border-b border-brand-800/20">
+                    <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white font-display font-bold text-sm">DQ</div>
+                        <div>
+                            <div className="text-white font-display font-semibold text-sm leading-tight">数据质量</div>
+                            <div className="text-[10px] text-gray-500 leading-tight">检测平台 v1.0</div>
+                        </div>
+                    </div>
+                </div>
+                <nav className="flex-1 py-3">
+                    {navItems.map(item => (
+                        <button key={item.id} onClick={() => setPage(item.id)}
+                            className={`sidebar-item w-full flex items-center gap-3 px-5 py-3 text-sm ${page === item.id ? 'active text-brand-300' : 'text-gray-400 hover:text-gray-200'}`}>
+                            <span className="text-base">{item.icon}</span>
+                            <span>{item.label}</span>
+                        </button>
+                    ))}
+                </nav>
+                <div className="p-4 border-t border-brand-800/20">
+                    <div className="text-[10px] text-gray-600 text-center">Powered by dingo engine</div>
+                </div>
+            </aside>
+
+            <main className="flex-1 overflow-y-auto p-6 lg:p-8">
+                {page === 'dashboard' && <DashboardPage />}
+                {page === 'datasources' && <DatasourcesPage />}
+                {page === 'rules' && <RulesPage />}
+                {page === 'tasks' && <TasksPage />}
+            </main>
+        </div>
+    );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
