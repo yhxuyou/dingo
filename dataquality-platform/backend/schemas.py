@@ -45,6 +45,7 @@ class RuleCreate(BaseModel):
     name: str
     metric_type: str
     group: Optional[str] = "custom"
+    rule_type: Optional[str] = "pattern"
     description: Optional[str] = None
     config: dict
 
@@ -53,6 +54,7 @@ class RuleUpdate(BaseModel):
     name: Optional[str] = None
     metric_type: Optional[str] = None
     group: Optional[str] = None
+    rule_type: Optional[str] = None
     description: Optional[str] = None
     config: Optional[dict] = None
 
@@ -62,6 +64,7 @@ class RuleResponse(BaseModel):
     name: str
     metric_type: str
     group: str
+    rule_type: str
     is_builtin: bool
     description: Optional[str]
     config: dict

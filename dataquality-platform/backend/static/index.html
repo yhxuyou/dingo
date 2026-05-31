@@ -571,15 +571,20 @@ function DatasourcesPage() {
 
 function RulesPage() {
     const [dimensions, setDimensions] = useState([]);
+    const [ruleTypes, setRuleTypes] = useState([]);
     const [activeDim, setActiveDim] = useState(null);
     const [rules, setRules] = useState([]);
     const [search, setSearch] = useState('');
-    const [modal, setModal] = useState(false);
-    const [form, setForm] = useState({ name: '', metric_type: '', group: 'custom', description: '', config: {} });
-    const [configText, setConfigText] = useState('{}');
+    const [modal, setModal] = useState(null);
+    const [form, setForm] = useState({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} });
+    const [error, setError] = useState('');
+    const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+    const RULE_TYPE_LABELS = { pattern: '正则模式匹配', keyword: '关键词检测', length: '长度校验', regex: '单正则匹配', builtin: '内置规则' };
 
     useEffect(() => {
         fetchJSON('/api/rules/dimensions').then(setDimensions).catch(console.error);
+        fetchJSON('/api/rules/rule-types').then(setRuleTypes).catch(console.error);
     }, []);
 
     const loadRules = useCallback(() => {
@@ -591,34 +596,80 @@ function RulesPage() {
 
     useEffect(() => { loadRules(); }, [loadRules]);
 
+    const buildConfig = () => {
+        const rt = form.rule_type;
+        if (rt === 'pattern') return { patterns: form.config.patterns || [] };
+        if (rt === 'keyword') return { keywords: form.config.keywords || [] };
+        if (rt === 'length') return { min_length: form.config.min_length ?? 0, max_length: form.config.max_length ?? 999999 };
+        if (rt === 'regex') return { pattern: form.config.pattern || '' };
+        return form.config;
+    };
+
     const handleSave = async () => {
+        setError('');
         try {
-            const config = JSON.parse(configText);
-            await fetchJSON('/api/rules', { method: 'POST', body: JSON.stringify({ ...form, config }) });
-            setModal(false);
-            setForm({ name: '', metric_type: '', group: 'custom', description: '', config: {} });
-            setConfigText('{}');
+            const config = buildConfig();
+            const payload = { ...form, config };
+            if (modal === 'add') {
+                await fetchJSON('/api/rules', { method: 'POST', body: JSON.stringify(payload) });
+            } else if (modal === 'edit') {
+                const { id, created_at, updated_at, is_builtin, ...updateData } = payload;
+                await fetchJSON(`/api/rules/${form.id}`, { method: 'PUT', body: JSON.stringify(updateData) });
+            }
+            setModal(null);
+            setForm({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} });
             loadRules();
         } catch (e) {
-            alert('配置 JSON 格式错误: ' + e.message);
+            try {
+                const err = JSON.parse(e.message.replace('HTTP 422: ', '').replace('HTTP 409: ', '').replace('HTTP 400: ', ''));
+                setError(err.detail || e.message);
+            } catch {
+                setError(e.message);
+            }
         }
     };
 
-    const handleDelete = async (id) => {
-        if (!confirm('确定删除此规则？')) return;
-        await fetchJSON(`/api/rules/${id}`, { method: 'DELETE' });
-        loadRules();
+    const handleEdit = (r) => {
+        setForm({
+            id: r.id, name: r.name, metric_type: r.metric_type,
+            group: r.group, rule_type: r.rule_type || 'pattern',
+            description: r.description || '', config: r.config || {},
+        });
+        setModal('edit');
     };
+
+    const handleDelete = async (id) => {
+        try {
+            await fetchJSON(`/api/rules/${id}`, { method: 'DELETE' });
+            setDeleteConfirm(null);
+            loadRules();
+        } catch (e) {
+            try {
+                const err = JSON.parse(e.message.replace('HTTP 409: ', '').replace('HTTP 400: ', ''));
+                alert(err.detail || '删除失败');
+            } catch { alert('删除失败: ' + e.message); }
+            setDeleteConfirm(null);
+        }
+    };
+
+    const addPatternItem = () => setForm(f => ({ ...f, config: { ...f.config, patterns: [...(f.config.patterns || []), ''] } }));
+    const removePatternItem = (i) => setForm(f => ({ ...f, config: { ...f.config, patterns: f.config.patterns.filter((_, idx) => idx !== i) } }));
+    const updatePatternItem = (i, v) => setForm(f => ({ ...f, config: { ...f.config, patterns: f.config.patterns.map((p, idx) => idx === i ? v : p) } }));
+
+    const addKeywordItem = () => setForm(f => ({ ...f, config: { ...f.config, keywords: [...(f.config.keywords || []), ''] } }));
+    const removeKeywordItem = (i) => setForm(f => ({ ...f, config: { ...f.config, keywords: f.config.keywords.filter((_, idx) => idx !== i) } }));
+    const updateKeywordItem = (i, v) => setForm(f => ({ ...f, config: { ...f.config, keywords: f.config.keywords.map((k, idx) => idx === i ? v : k) } }));
 
     return (
         <div className="fade-in">
             <div className="flex items-center justify-between mb-6">
                 <h1 className="font-display text-2xl font-bold text-white">规则管理</h1>
-                <button onClick={() => setModal(true)} className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 自定义规则</button>
+                <button onClick={() => { setModal('add'); setForm({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} }); setError(''); }}
+                    className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 自定义规则</button>
             </div>
 
-            <div className="flex items-center gap-3 mb-4">
-                <input className="input-field rounded-lg px-3 py-2 text-white text-sm flex-1" placeholder="搜索规则..."
+            <div className="flex items-center gap-3 mb-4 flex-wrap">
+                <input className="input-field rounded-lg px-3 py-2 text-white text-sm flex-1 min-w-[200px]" placeholder="搜索规则..."
                     value={search} onChange={e => setSearch(e.target.value)} />
                 <button onClick={() => setActiveDim(null)} className={`dimension-tag ${!activeDim ? 'bg-brand-600/30 text-brand-200 border border-brand-500/40' : 'bg-surface-200 text-gray-400 border border-transparent'}`}
                     >全部</button>
@@ -648,7 +699,7 @@ function RulesPage() {
                                 <div className="flex items-center gap-3">
                                     <div className="w-2 h-8 rounded-full" style={{ background: c.text }} />
                                     <div>
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                             <span className="text-white font-medium font-display">{r.name}</span>
                                             {r.is_builtin ? (
                                                 <span className="badge bg-brand-800/40 text-brand-300">内置</span>
@@ -658,12 +709,32 @@ function RulesPage() {
                                             <span className="badge" style={{ background: c.bg, color: c.text }}>
                                                 {r.metric_type.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}
                                             </span>
+                                            {!r.is_builtin && r.rule_type && (
+                                                <span className="badge bg-surface-300 text-gray-400">
+                                                    {RULE_TYPE_LABELS[r.rule_type] || r.rule_type}
+                                                </span>
+                                            )}
                                         </div>
                                         {r.description && <div className="text-xs text-gray-500 mt-1 max-w-lg truncate">{r.description}</div>}
+                                        {!r.is_builtin && r.rule_type === 'pattern' && r.config?.patterns && (
+                                            <div className="text-xs text-gray-600 mt-1 truncate">模式: {r.config.patterns.join(' | ')}</div>
+                                        )}
+                                        {!r.is_builtin && r.rule_type === 'keyword' && r.config?.keywords && (
+                                            <div className="text-xs text-gray-600 mt-1 truncate">关键词: {r.config.keywords.join(', ')}</div>
+                                        )}
+                                        {!r.is_builtin && r.rule_type === 'length' && r.config && (
+                                            <div className="text-xs text-gray-600 mt-1">长度范围: {r.config.min_length ?? 0} ~ {r.config.max_length ?? '∞'}</div>
+                                        )}
+                                        {!r.is_builtin && r.rule_type === 'regex' && r.config?.pattern && (
+                                            <div className="text-xs text-gray-600 mt-1 truncate font-mono">正则: {r.config.pattern}</div>
+                                        )}
                                     </div>
                                 </div>
                                 {!r.is_builtin && (
-                                    <button onClick={() => handleDelete(r.id)} className="btn-ghost text-coral px-3 py-1 rounded text-xs">删除</button>
+                                    <div className="flex items-center gap-2">
+                                        <button onClick={() => handleEdit(r)} className="btn-ghost text-amber px-3 py-1 rounded text-xs">编辑</button>
+                                        <button onClick={() => setDeleteConfirm(r)} className="btn-ghost text-coral px-3 py-1 rounded text-xs">删除</button>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -672,34 +743,120 @@ function RulesPage() {
                 {rules.length === 0 && <div className="text-center text-gray-500 py-12">无匹配规则</div>}
             </div>
 
-            <Modal open={modal} onClose={() => setModal(false)} title="创建自定义规则">
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">规则名称</label>
-                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
-                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="如: RuleMyCustomCheck" />
+            {deleteConfirm && (
+                <Modal open={!!deleteConfirm} onClose={() => setDeleteConfirm(null)} title="确认删除">
+                    <div className="space-y-4">
+                        <p className="text-gray-300">确定要删除自定义规则 <span className="text-white font-medium">{deleteConfirm.name}</span> 吗？此操作不可撤销。</p>
+                        {deleteConfirm.description && <p className="text-sm text-gray-500">{deleteConfirm.description}</p>}
+                        <div className="flex justify-end gap-3">
+                            <button onClick={() => setDeleteConfirm(null)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                            <button onClick={() => handleDelete(deleteConfirm.id)} className="btn-danger text-white px-4 py-2 rounded-lg text-sm">确认删除</button>
+                        </div>
                     </div>
+                </Modal>
+            )}
+
+            <Modal open={!!modal} onClose={() => { setModal(null); setError(''); }} title={modal === 'add' ? '创建自定义规则' : '编辑自定义规则'}>
+                <div className="space-y-4">
+                    {error && (
+                        <div className="bg-coral/10 border border-coral/30 rounded-lg px-3 py-2 text-sm text-coral">{error}</div>
+                    )}
                     <div>
-                        <label className="block text-sm text-gray-400 mb-1">质量维度</label>
-                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.metric_type}
-                            onChange={e => setForm(f => ({ ...f, metric_type: e.target.value }))}>
-                            <option value="">选择维度</option>
-                            {dimensions.map(d => <option key={d.name} value={d.name}>{d.name.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}</option>)}
-                        </select>
+                        <label className="block text-sm text-gray-400 mb-1">规则名称 <span className="text-coral">*</span></label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
+                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="如: MyCustomPatternCheck" />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">质量维度 <span className="text-coral">*</span></label>
+                            <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.metric_type}
+                                onChange={e => setForm(f => ({ ...f, metric_type: e.target.value }))}>
+                                <option value="">选择维度</option>
+                                {dimensions.map(d => <option key={d.name} value={d.name}>{d.name.replace('QUALITY_BAD_', '').replace(/_/g, ' ')}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">规则类型 <span className="text-coral">*</span></label>
+                            <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.rule_type}
+                                onChange={e => setForm(f => ({ ...f, rule_type: e.target.value, config: {} }))}>
+                                {ruleTypes.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+                            </select>
+                        </div>
                     </div>
                     <div>
                         <label className="block text-sm text-gray-400 mb-1">描述</label>
                         <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" rows={2}
-                            value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="描述此规则的检测目的..." />
                     </div>
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">规则配置 (JSON)</label>
-                        <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono" rows={4}
-                            value={configText} onChange={e => setConfigText(e.target.value)} />
-                    </div>
+
+                    {form.rule_type === 'pattern' && (
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-2">正则模式列表 <span className="text-coral">*</span></label>
+                            <div className="space-y-2">
+                                {(form.config.patterns || []).map((p, i) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                        <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm font-mono"
+                                            value={p} onChange={e => updatePatternItem(i, e.target.value)} placeholder="输入正则表达式，如: \\d{4}-\\d{2}-\\d{2}" />
+                                        <button onClick={() => removePatternItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
+                                    </div>
+                                ))}
+                                <button onClick={addPatternItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加模式</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {form.rule_type === 'keyword' && (
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-2">关键词列表 <span className="text-coral">*</span></label>
+                            <div className="space-y-2">
+                                {(form.config.keywords || []).map((kw, i) => (
+                                    <div key={i} className="flex items-center gap-2">
+                                        <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm"
+                                            value={kw} onChange={e => updateKeywordItem(i, e.target.value)} placeholder="输入关键词" />
+                                        <button onClick={() => removeKeywordItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
+                                    </div>
+                                ))}
+                                <button onClick={addKeywordItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加关键词</button>
+                            </div>
+                        </div>
+                    )}
+
+                    {form.rule_type === 'length' && (
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">最小长度</label>
+                                <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                    value={form.config.min_length ?? 0} onChange={e => setForm(f => ({ ...f, config: { ...f.config, min_length: parseInt(e.target.value) || 0 } }))}
+                                    min={0} />
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">最大长度</label>
+                                <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                    value={form.config.max_length ?? 999999} onChange={e => setForm(f => ({ ...f, config: { ...f.config, max_length: parseInt(e.target.value) || 999999 } }))}
+                                    min={0} />
+                            </div>
+                        </div>
+                    )}
+
+                    {form.rule_type === 'regex' && (
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">正则表达式 <span className="text-coral">*</span></label>
+                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
+                                value={form.config.pattern || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, pattern: e.target.value } }))}
+                                placeholder="输入正则表达式，如: \\d{4}-\\d{2}-\\d{2}" />
+                        </div>
+                    )}
+
+                    {form.rule_type && ruleTypes.find(rt => rt.value === form.rule_type) && (
+                        <div className="text-xs text-gray-600 bg-surface-0 rounded-lg px-3 py-2">
+                            💡 {ruleTypes.find(rt => rt.value === form.rule_type).description}
+                        </div>
+                    )}
+
                     <div className="flex justify-end gap-3 pt-2">
-                        <button onClick={() => setModal(false)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
-                        <button onClick={handleSave} className="btn-primary text-white px-4 py-2 rounded-lg text-sm">创建</button>
+                        <button onClick={() => { setModal(null); setError(''); }} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                        <button onClick={handleSave} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
+                            disabled={!form.name || !form.metric_type}>{modal === 'add' ? '创建' : '保存'}</button>
                     </div>
                 </div>
             </Modal>

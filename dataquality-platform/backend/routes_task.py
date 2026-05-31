@@ -122,30 +122,19 @@ async def start_task(task_id: int, session: AsyncSession = Depends(get_session))
         raise HTTPException(status_code=404, detail="Datasource not found")
 
     rule_ids = json.loads(t.rule_ids)
-    rule_configs = []
-
-    builtin_map = {r["name"]: r for r in get_builtin_rules()}
-    for rid in rule_ids:
-        if rid < 0:
-            name = [r["name"] for r in get_builtin_rules() if id(r) == rid]
-            continue
-        r = await session.get(Rule, rid)
-        if r:
-            rule_configs.append({"name": r.name, "config": r.config})
-        else:
-            for br in get_builtin_rules():
-                pass
 
     all_rules = get_builtin_rules()
-    custom_rules_result = await session.execute(select(Rule))
-    custom_rules = {r.name: r for r in custom_rules_result.scalars().all()}
 
     resolved_rules = []
     for rid in rule_ids:
         if rid > 0:
             r = await session.get(Rule, rid)
             if r:
-                resolved_rules.append({"name": r.name, "config": r.config})
+                resolved_rules.append({
+                    "name": r.name,
+                    "config": r.config,
+                    "rule_type": r.rule_type,
+                })
         else:
             idx = abs(rid) - 1
             if 0 <= idx < len(all_rules):

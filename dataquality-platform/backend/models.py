@@ -40,6 +40,7 @@ class Rule(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     metric_type: Mapped[str] = mapped_column(String(200), nullable=False)
     group: Mapped[str] = mapped_column(String(200), nullable=False, default="custom")
+    rule_type: Mapped[str] = mapped_column(String(50), nullable=False, default="pattern")
     is_builtin: Mapped[bool] = mapped_column(default=False)
     description: Mapped[str] = mapped_column(Text, nullable=True)
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

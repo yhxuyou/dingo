@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 import uuid
 from typing import Optional
@@ -143,11 +144,34 @@ def build_input_args(
     for rc in rule_configs:
         rule_name = rc.get("name", "")
         rule_config = rc.get("config", {})
+        rule_type = rc.get("rule_type", "")
+
         if rule_name in Model.rule_name_map:
             eval_config = None
             if rule_config:
                 eval_config = EvaluatorRuleArgs(**rule_config)
             evals.append(EvalPiplineConfig(name=rule_name, config=eval_config))
+        elif rule_type in ("pattern", "regex"):
+            pattern = rule_config.get("pattern", "")
+            if rule_type == "pattern":
+                patterns = rule_config.get("patterns", [])
+                if patterns:
+                    pattern = "|".join(f"({p})" for p in patterns)
+            if pattern:
+                eval_config = EvaluatorRuleArgs(pattern=pattern)
+                evals.append(EvalPiplineConfig(name="RulePatternSearch", config=eval_config))
+        elif rule_type == "keyword":
+            keywords = rule_config.get("keywords", [])
+            if keywords:
+                pattern = "|".join(f"({re.escape(kw)})" for kw in keywords)
+                eval_config = EvaluatorRuleArgs(pattern=pattern)
+                evals.append(EvalPiplineConfig(name="RulePatternSearch", config=eval_config))
+        elif rule_type == "length":
+            min_len = rule_config.get("min_length", 0)
+            max_len = rule_config.get("max_length", 999999)
+            key_list = [str(min_len), str(max_len)]
+            eval_config = EvaluatorRuleArgs(key_list=key_list)
+            evals.append(EvalPiplineConfig(name="RuleWordNumber", config=eval_config))
 
     evaluator = [EvalPipline(fields=field_mapping or {}, evals=evals)]
 
