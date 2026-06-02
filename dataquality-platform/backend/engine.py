@@ -3,10 +3,19 @@ import json
 import os
 import re
 import sys
+import traceback
 import uuid
 from typing import Optional
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+# 在导入 dingo 模块之前设置环境变量，强制使用线程模式
+os.environ["LOCAL_DEPLOYMENT_MODE"] = "true"
+
+# 将项目内的 dingo 目录添加到 sys.path 最前面，确保优先使用项目内的 dingo
+project_dingo_dir = os.path.join(os.path.dirname(__file__), "dingo")
+sys.path.insert(0, project_dingo_dir)
+
+# 将项目根目录添加到 sys.path
+sys.path.insert(0, os.path.dirname(__file__))
 
 from dingo.config import InputArgs
 from dingo.config.input_args import (
@@ -17,6 +26,7 @@ from dingo.config.input_args import (
     DatasetParquetArgs,
     ExecutorArgs,
     ExecutorResultSaveArgs,
+    SamplingArgs,
     EvalPipline,
     EvalPiplineConfig,
     EvaluatorRuleArgs,
@@ -53,6 +63,16 @@ def get_builtin_rules() -> list[dict]:
     return rules
 
 
+def get_rule_default_config(rule_name: str) -> dict:
+    cls = Model.rule_name_map.get(rule_name)
+    if not cls:
+        return {}
+    dc = getattr(cls, "dynamic_config", None)
+    if dc is None:
+        return {}
+    return dc.model_dump()
+
+
 def get_builtin_rules_grouped() -> dict[str, list[dict]]:
     rules = get_builtin_rules()
     grouped: dict[str, list[dict]] = {}
@@ -80,6 +100,7 @@ def build_input_args(
     rule_configs: list[dict],
     task_name: str = "dataquality_task",
     field_mapping: Optional[dict] = None,
+    sampling: Optional[dict] = None,
 ) -> InputArgs:
     ds_type = datasource_config.get("type", "local_file")
     ds_config = datasource_config.get("config", {})
@@ -126,7 +147,12 @@ def build_input_args(
             "sqlserver": "pyodbc",
             "sqlite": "",
         }
-        input_path = ds_config.get("query", "SELECT 1")
+        table_name = datasource_config.get("table", "")
+        query = ds_config.get("query", "")
+        if table_name and (not query or query.strip() in ("SELECT 1", "")):
+            quote = "`" if ds_type == "mysql" else '"'
+            query = f"SELECT * FROM {quote}{table_name}{quote}"
+        input_path = query
         dataset_args.source = "sql"
         dataset_args.format = "jsonl"
         dataset_args.sql_config = DatasetSqlArgs(
@@ -145,11 +171,22 @@ def build_input_args(
         rule_name = rc.get("name", "")
         rule_config = rc.get("config", {})
         rule_type = rc.get("rule_type", "")
+        target_field = rc.get("target_field", "content")
 
         if rule_name in Model.rule_name_map:
+            # 内置规则：直接传入完整 config（含 threshold, pattern, key_list, parameters 等）
             eval_config = None
             if rule_config:
-                eval_config = EvaluatorRuleArgs(**rule_config)
+                # 分离 EvaluatorRuleArgs 支持的字段和 parameters
+                known_fields = {}
+                params = rule_config.get("parameters", {})
+                for k, v in rule_config.items():
+                    if k in ("threshold", "pattern", "key_list", "refer_path"):
+                        known_fields[k] = v
+                if params:
+                    known_fields["parameters"] = params
+                if known_fields:
+                    eval_config = EvaluatorRuleArgs(**known_fields)
             evals.append(EvalPiplineConfig(name=rule_name, config=eval_config))
         elif rule_type in ("pattern", "regex"):
             pattern = rule_config.get("pattern", "")
@@ -173,7 +210,34 @@ def build_input_args(
             eval_config = EvaluatorRuleArgs(key_list=key_list)
             evals.append(EvalPiplineConfig(name="RuleWordNumber", config=eval_config))
 
-    evaluator = [EvalPipline(fields=field_mapping or {}, evals=evals)]
+    # 构建字段映射：将 target_field 映射到 evaluator 的 content 字段
+    if field_mapping:
+        evaluator = [EvalPipline(fields=field_mapping, evals=evals)]
+    else:
+        field_groups = {}
+        for i, e_c in enumerate(evals):
+            tf = rule_configs[i].get("target_field", "content") if i < len(rule_configs) else "content"
+            field_groups.setdefault(tf, []).append(e_c)
+        evaluator = []
+        for tf, eg in field_groups.items():
+            fields_list = [f.strip() for f in tf.split(",") if f.strip()]
+            if len(fields_list) > 1:
+                for single_field in fields_list:
+                    evaluator.append(EvalPipline(fields={"content": single_field}, evals=eg))
+            elif fields_list:
+                evaluator.append(EvalPipline(fields={"content": fields_list[0]}, evals=eg))
+            else:
+                evaluator.append(EvalPipline(fields={}, evals=eg))
+        if not evaluator:
+            evaluator = [EvalPipline(fields={}, evals=evals)]
+
+    sampling_args = SamplingArgs()
+    if sampling:
+        sampling_args = SamplingArgs(
+            mode=sampling.get("mode", "full"),
+            size=sampling.get("size"),
+            seed=sampling.get("seed"),
+        )
 
     return InputArgs(
         task_name=task_name,
@@ -187,6 +251,7 @@ def build_input_args(
             result_save=ExecutorResultSaveArgs(
                 bad=True, good=False, all_labels=True, raw=True, merge=True,
             ),
+            sampling=sampling_args,
         ),
         evaluator=evaluator,
     )
@@ -198,6 +263,7 @@ async def run_evaluation_task(
     rule_configs: list[dict],
     task_name: str,
     field_mapping: Optional[dict] = None,
+    sampling: Optional[dict] = None,
 ):
     _task_store[task_id] = {
         "status": "running",
@@ -206,16 +272,64 @@ async def run_evaluation_task(
         "processed": 0,
     }
 
+    DEBUG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug_requests")
+    os.makedirs(DEBUG_DIR, exist_ok=True)
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    engine_debug_file = os.path.join(DEBUG_DIR, f"task_{task_id}_engine_input_{timestamp}.json")
+    engine_debug_data = {
+        "task_id": task_id,
+        "task_name": task_name,
+        "datasource_config": datasource_config,
+        "rule_configs": rule_configs,
+        "field_mapping": field_mapping,
+    }
+    with open(engine_debug_file, "w", encoding="utf-8") as f:
+        json.dump(engine_debug_data, f, ensure_ascii=False, indent=2)
+    print(f"[ENGINE DEBUG] 任务 {task_id} 引擎输入已保存: {engine_debug_file}")
+
     try:
+        # 设置环境变量，强制使用线程模式而不是多进程，确保类型转换正确生效
+        os.environ["LOCAL_DEPLOYMENT_MODE"] = "true"
+        
         input_args = build_input_args(
-            datasource_config, rule_configs, task_name, field_mapping
+            datasource_config, rule_configs, task_name, field_mapping, sampling
         )
+
+        input_args_file = os.path.join(DEBUG_DIR, f"task_{task_id}_input_args_{timestamp}.json")
+        input_args_debug = {
+            "task_name": input_args.task_name,
+            "input_path": input_args.input_path,
+            "input_args": input_args.model_dump(),
+            "dataset": {
+                "source": input_args.dataset.source,
+                "format": input_args.dataset.format,
+                "sql_config": input_args.dataset.sql_config.model_dump() if input_args.dataset.sql_config else None,
+            },
+            "evaluator": [
+                {
+                    "fields": ep.fields,
+                    "evals": [
+                        {"name": e.name, "config": e.config.model_dump() if e.config else None}
+                        for e in ep.evals
+                    ]
+                }
+                for ep in input_args.evaluator
+            ],
+        }
+        with open(input_args_file, "w", encoding="utf-8") as f:
+            json.dump(input_args_debug, f, ensure_ascii=False, indent=2)
+        print(f"[ENGINE DEBUG] 任务 {task_id} InputArgs 已保存: {input_args_file}")
 
         loop = asyncio.get_event_loop()
 
         def _execute():
-            executor = Executor.exec_map["local"](input_args)
-            return executor.execute()
+            try:
+                executor = Executor.exec_map["local"](input_args)
+                return executor.execute()
+            finally:
+                pass
 
         result = await loop.run_in_executor(None, _execute)
 
@@ -239,6 +353,9 @@ async def run_evaluation_task(
             "error_message": "Task was cancelled",
         }
     except Exception as e:
+        error_detail = traceback.format_exc()
+        print(f"[ENGINE ERROR] 任务 {task_id} 执行失败，完整堆栈:")
+        print(error_detail)
         _task_store[task_id] = {
             "status": "failed",
             "progress": _task_store[task_id].get("progress", 0),
@@ -252,13 +369,20 @@ def get_task_progress(task_id: int) -> Optional[dict]:
     return _task_store.get(task_id)
 
 
-def get_bad_data(task_id: int, task_name: str) -> list[dict]:
+def get_bad_data(task_id: int, task_name: str, summary: dict = None) -> list[dict]:
     task_dir = None
-    for d in os.listdir(OUTPUT_DIR):
-        full_path = os.path.join(OUTPUT_DIR, d)
-        if os.path.isdir(full_path) and task_name in d:
-            task_dir = full_path
-            break
+
+    if summary and summary.get("output_path"):
+        candidate = summary["output_path"]
+        if os.path.isdir(candidate):
+            task_dir = candidate
+
+    if not task_dir:
+        for d in os.listdir(OUTPUT_DIR):
+            full_path = os.path.join(OUTPUT_DIR, d)
+            if os.path.isdir(full_path) and task_name in d:
+                task_dir = full_path
+                break
 
     if not task_dir:
         return []

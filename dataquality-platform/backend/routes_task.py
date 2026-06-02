@@ -1,6 +1,8 @@
 import asyncio
 import json
+import os
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
@@ -15,6 +17,18 @@ from backend.engine import run_evaluation_task, get_task_progress, get_bad_data,
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 _running_tasks: dict[int, asyncio.Task] = {}
+
+DEBUG_DIR = Path(__file__).parent / "debug_requests"
+DEBUG_DIR.mkdir(exist_ok=True)
+
+
+def _log_request(task_id: int, label: str, data: dict):
+    """保存请求调试信息到文件"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = DEBUG_DIR / f"task_{task_id}_{label}_{timestamp}.json"
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[DEBUG] {label} 日志已保存: {filename}")
 
 
 def _to_response(t: Task) -> TaskResponse:
@@ -51,6 +65,9 @@ def _to_response(t: Task) -> TaskResponse:
         datasource_id=t.datasource_id,
         rule_ids=t.rule_ids,
         field_mapping=t.field_mapping,
+        rule_configs=t.rule_configs,
+        table_name=t.table_name,
+        sampling=t.sampling,
         status=status,
         progress=progress,
         total=total,
@@ -90,6 +107,9 @@ async def create_task(
         datasource_id=body.datasource_id,
         rule_ids=rule_ids_str,
         field_mapping=body.field_mapping or {},
+        rule_configs=body.rule_configs,
+        table_name=body.table_name,
+        sampling=body.sampling.model_dump() if body.sampling else None,
         status=TaskStatus.PENDING,
     )
     session.add(t)
@@ -141,8 +161,36 @@ async def start_task(task_id: int, session: AsyncSession = Depends(get_session))
                 br = all_rules[idx]
                 resolved_rules.append({"name": br["name"], "config": {}})
 
+    if t.rule_configs:
+        rc_map = {}
+        for rc in t.rule_configs:
+            rc_map[rc.get("rule_id")] = rc
+        for i, rr in enumerate(resolved_rules):
+            matched_rc = None
+            for rc in t.rule_configs:
+                if rc.get("name") == rr["name"]:
+                    matched_rc = rc
+                    break
+            if matched_rc:
+                if matched_rc.get("config"):
+                    merged_config = {**rr["config"], **matched_rc["config"]}
+                    rr["config"] = merged_config
+                if matched_rc.get("target_field"):
+                    rr["target_field"] = matched_rc["target_field"]
+
     ds_type = ds.type.value if hasattr(ds.type, "value") else ds.type
     datasource_config = {"type": ds_type, "config": ds.config}
+    if t.table_name:
+        datasource_config["table"] = t.table_name
+
+    debug_request_data = {
+        "task_id": t.id,
+        "task_name": t.name,
+        "datasource_config": datasource_config,
+        "rule_configs": resolved_rules,
+        "field_mapping": t.field_mapping,
+    }
+    _log_request(t.id, "start_request", debug_request_data)
 
     t.status = TaskStatus.RUNNING
     t.started_at = datetime.utcnow()
@@ -156,6 +204,7 @@ async def start_task(task_id: int, session: AsyncSession = Depends(get_session))
             rule_configs=resolved_rules,
             task_name=t.name,
             field_mapping=t.field_mapping,
+            sampling=t.sampling,
         )
     )
     _running_tasks[t.id] = atask
@@ -217,7 +266,7 @@ async def get_report(task_id: int, session: AsyncSession = Depends(get_session))
     elif t.summary:
         summary = t.summary
 
-    bad_data = get_bad_data(t.id, t.name)
+    bad_data = get_bad_data(t.id, t.name, summary)
 
     return {
         "task_id": t.id,
@@ -240,7 +289,7 @@ async def download_bad_data(task_id: int, session: AsyncSession = Depends(get_se
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Task not found")
 
-    bad_data = get_bad_data(t.id, t.name)
+    bad_data = get_bad_data(t.id, t.name, t.summary)
     content = json.dumps(bad_data, ensure_ascii=False, indent=2)
 
     return StreamingResponse(
@@ -248,6 +297,76 @@ async def download_bad_data(task_id: int, session: AsyncSession = Depends(get_se
         media_type="application/json",
         headers={
             "Content-Disposition": f"attachment; filename=bad_data_task_{t.id}.json"
+        },
+    )
+
+
+@router.get("/{task_id}/download-csv")
+async def download_bad_data_csv(task_id: int, session: AsyncSession = Depends(get_session)):
+    import csv
+    import io
+
+    t = await session.get(Task, task_id)
+    if not t:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    bad_data = get_bad_data(t.id, t.name, t.summary)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["序号", "质量维度", "规则名称", "问题标签", "问题原因", "检测字段", "数据内容", "数据提示"])
+
+    row_idx = 0
+    for item in bad_data:
+        dingo_result = item.get("dingo_result", {})
+        eval_details = dingo_result.get("eval_details", {})
+        prompt = item.get("prompt", "") or ""
+        raw_content = item.get("content", "") or ""
+        content_str = str(raw_content)[:500] if raw_content else ""
+
+        for field_name, details in eval_details.items():
+            if not isinstance(details, list):
+                continue
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                if detail.get("status") is not True:
+                    continue
+
+                labels = detail.get("label") or []
+                reasons = detail.get("reason") or []
+                metric = detail.get("metric", "")
+
+                full_label = labels[0] if labels else ""
+                reason_str = "; ".join(str(r) for r in reasons) if reasons else ""
+
+                if full_label and "." in full_label:
+                    dimension = full_label.rsplit(".", 1)[0]
+                else:
+                    dimension = ""
+
+                row_idx += 1
+                writer.writerow([
+                    row_idx,
+                    dimension,
+                    metric,
+                    full_label,
+                    reason_str,
+                    field_name,
+                    content_str,
+                    str(prompt)[:500] if prompt else "",
+                ])
+
+    csv_content = output.getvalue()
+    output.close()
+
+    bom = "\ufeff"
+    return StreamingResponse(
+        iter([bom + csv_content]),
+        media_type="text/csv; charset=utf-8-sig",
+        headers={
+            "Content-Disposition": f"attachment; filename=bad_data_task_{t.id}.csv"
         },
     )
 

@@ -190,6 +190,10 @@
             overflow-y: auto;
         }
 
+        .modal-content.modal-wide {
+            max-width: 900px;
+        }
+
         .dimension-tag {
             display: inline-flex;
             align-items: center;
@@ -225,8 +229,9 @@ const { useState, useEffect, useCallback, useRef, useMemo } = React;
 
 const API = '';
 const fetchJSON = async (url, opts = {}) => {
+    const isBody = opts.body || opts.method === 'POST' || opts.method === 'PUT';
     const res = await fetch(API + url, {
-        headers: { 'Content-Type': 'application/json', ...opts.headers },
+        headers: isBody ? { 'Content-Type': 'application/json', ...opts.headers } : opts.headers,
         ...opts,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -286,11 +291,11 @@ function ScoreRing({ score, size = 120 }) {
     );
 }
 
-function Modal({ open, onClose, title, children }) {
+function Modal({ open, onClose, title, children, wide }) {
     if (!open) return null;
     return (
         <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-            <div className="modal-content fade-in">
+            <div className={`modal-content fade-in ${wide ? 'modal-wide' : ''}`}>
                 <div className="flex items-center justify-between p-5 border-b border-brand-800/30">
                     <h3 className="font-display text-lg font-semibold text-white">{title}</h3>
                     <button onClick={onClose} className="text-gray-500 hover:text-white transition-colors text-xl leading-none">&times;</button>
@@ -363,6 +368,9 @@ function DatasourcesPage() {
     const [testResult, setTestResult] = useState(null);
     const [form, setForm] = useState({ name: '', type: 'local_file', config: {} });
     const [uploadResult, setUploadResult] = useState(null);
+    const [tablesModal, setTablesModal] = useState(null);
+    const [tablesList, setTablesList] = useState([]);
+    const [tablesLoading, setTablesLoading] = useState(false);
 
     const load = () => fetchJSON('/api/datasources').then(setSources).catch(console.error);
     useEffect(() => { load(); }, []);
@@ -396,10 +404,41 @@ function DatasourcesPage() {
         setTestResult(res);
     };
 
-    const handleBrowse = async (id, page = 1, table = '') => {
-        setBrowseDsId(id);
+    const handleBrowseClick = async (id) => {
+        const ds = sources.find(s => s.id === id);
+        const dsType = ds?.type;
+        if (dsType === 'local_file') {
+            setBrowseDsId(id);
+            setBrowsePage(1);
+            setBrowseTable('');
+            const res = await fetchJSON(`/api/datasources/${id}/browse?page=1&page_size=20`);
+            setBrowseData(res);
+        } else {
+            setTablesLoading(true);
+            setTablesModal(id);
+            try {
+                const res = await fetchJSON(`/api/datasources/${id}/tables`);
+                setTablesList(res.tables || []);
+            } catch (e) {
+                console.error(e);
+                setTablesList([]);
+            }
+            setTablesLoading(false);
+        }
+    };
+
+    const handleSelectTable = async (tableName) => {
+        setBrowseDsId(tablesModal);
+        setBrowseTable(tableName);
+        setBrowsePage(1);
+        setTablesModal(null);
+        const res = await fetchJSON(`/api/datasources/${tablesModal}/browse?page=1&page_size=20&table=${encodeURIComponent(tableName)}`);
+        setBrowseData(res);
+    };
+
+    const handleBrowsePage = async (page) => {
         setBrowsePage(page);
-        const res = await fetchJSON(`/api/datasources/${id}/browse?page=${page}&page_size=20${table ? '&table=' + table : ''}`);
+        const res = await fetchJSON(`/api/datasources/${browseDsId}/browse?page=${page}&page_size=20${browseTable ? '&table=' + encodeURIComponent(browseTable) : ''}`);
         setBrowseData(res);
     };
 
@@ -426,13 +465,13 @@ function DatasourcesPage() {
                         <span className="text-white font-medium">{testResult.message}</span>
                     </div>
                     {testResult.tables && testResult.tables.length > 0 && (
-                        <div className="text-sm text-gray-400">
-                            <span className="text-gray-300">数据表：</span>
-                            {testResult.tables.map((t, i) => (
-                                <span key={i} className="badge bg-brand-800/50 text-brand-300 ml-1 cursor-pointer" onClick={() => { setBrowseTable(t); handleBrowse(browseDsId, 1, t); }}>{t}</span>
-                            ))}
-                        </div>
-                    )}
+                                <div className="text-sm text-gray-400">
+                                    <span className="text-gray-300">数据表：</span>
+                                    {testResult.tables.map((t, i) => (
+                                        <span key={i} className="badge bg-brand-800/50 text-brand-300 ml-1 cursor-pointer" onClick={() => { if (browseDsId !== null) { setBrowseTable(t); handleBrowsePage(1); } }}>{t}</span>
+                                    ))}
+                                </div>
+                            )}
                     <button onClick={() => setTestResult(null)} className="text-xs text-gray-500 mt-2 hover:text-gray-300">关闭</button>
                 </div>
             )}
@@ -447,12 +486,12 @@ function DatasourcesPage() {
                                     <span className="text-2xl">{dt.icon}</span>
                                     <div>
                                         <div className="text-white font-medium">{ds.name}</div>
-                                        <div className="text-xs text-gray-500">{dt.label} · 创建于 {new Date(ds.created_at).toLocaleDateString()}</div>
+                                        <div className="text-xs text-gray-500">{dt.label}{ds.config?.database ? ` · ${ds.config.database}` : ''} · 创建于 {new Date(ds.created_at).toLocaleDateString()}</div>
                                     </div>
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <button onClick={() => handleTest(ds.id)} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs">测试连接</button>
-                                    <button onClick={() => handleBrowse(ds.id)} className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs">浏览数据</button>
+                                    <button onClick={() => handleBrowseClick(ds.id)} className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs">浏览数据</button>
                                     <button onClick={() => { setModal('edit'); setForm({ id: ds.id, name: ds.name, type: ds.type, config: ds.config }); }} className="btn-ghost text-amber px-3 py-1.5 rounded-lg text-xs">编辑</button>
                                     <button onClick={() => handleDelete(ds.id)} className="btn-ghost text-coral px-3 py-1.5 rounded-lg text-xs">删除</button>
                                 </div>
@@ -463,10 +502,45 @@ function DatasourcesPage() {
                 {sources.length === 0 && <div className="text-center text-gray-500 py-12">暂无数据源，点击右上角新增</div>}
             </div>
 
+            {tablesModal !== null && (
+                <Modal open={true} onClose={() => { setTablesModal(null); setTablesList([]); }} title="选择数据表">
+                    {tablesLoading ? (
+                        <div className="text-center text-gray-400 py-8">加载中...</div>
+                    ) : tablesList.length === 0 ? (
+                        <div className="text-center text-gray-500 py-8">未发现数据表</div>
+                    ) : (
+                        <div>
+                            <div className="text-sm text-gray-400 mb-3">共 {tablesList.length} 张表</div>
+                            <div className="max-h-96 overflow-y-auto space-y-1">
+                                {tablesList.map((t, i) => (
+                                    <div key={i} className="flex items-center justify-between p-3 bg-surface-0 rounded-lg hover:bg-surface-200 transition-colors">
+                                        <div className="flex-1 min-w-0">
+                                            <div className="text-white text-sm font-medium truncate">{t.name}</div>
+                                            <div className="text-xs text-gray-500 mt-0.5">
+                                                {t.row_count >= 0 ? `${t.row_count.toLocaleString()} 行` : '行数未知'}
+                                                {t.column_count ? ` · ${t.column_count} 列` : ''}
+                                            </div>
+                                        </div>
+                                        <button onClick={() => handleSelectTable(t.name)}
+                                            className="btn-primary text-white px-3 py-1.5 rounded-lg text-xs ml-3 flex-shrink-0">查看</button>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </Modal>
+            )}
+
             {browseData && (
-                <Modal open={!!browseData} onClose={() => { setBrowseData(null); setBrowseDsId(null); }} title="数据浏览">
+                <Modal open={!!browseData} onClose={() => { setBrowseData(null); setBrowseDsId(null); setBrowseTable(''); }} title={browseTable ? `数据浏览 - ${browseTable}` : '数据浏览'}>
                     <div className="overflow-x-auto">
-                        <div className="text-sm text-gray-400 mb-3">共 {browseData.total} 条 · 第 {browseData.page} 页</div>
+                        <div className="flex items-center justify-between mb-3">
+                            <div className="text-sm text-gray-400">共 {browseData.total.toLocaleString()} 条 · 第 {browsePage} 页</div>
+                            {browseTable && (
+                                <button onClick={() => { setBrowseData(null); handleBrowseClick(browseDsId); }}
+                                    className="btn-ghost text-brand-300 px-2 py-1 rounded text-xs">切换表</button>
+                            )}
+                        </div>
                         {browseData.columns.length > 0 ? (
                             <table className="w-full text-sm">
                                 <thead>
@@ -483,11 +557,16 @@ function DatasourcesPage() {
                                 </tbody>
                             </table>
                         ) : <div className="text-gray-500 text-center py-8">无数据</div>}
-                        <div className="flex justify-center gap-2 mt-4">
-                            <button disabled={browsePage <= 1} onClick={() => handleBrowse(browseDsId, browsePage - 1, browseTable)}
+                        <div className="flex items-center justify-center gap-2 mt-4">
+                            <button disabled={browsePage <= 1} onClick={() => handleBrowsePage(1)}
+                                className="btn-ghost text-brand-300 px-2 py-1 rounded text-xs disabled:opacity-30">首页</button>
+                            <button disabled={browsePage <= 1} onClick={() => handleBrowsePage(browsePage - 1)}
                                 className="btn-ghost text-brand-300 px-3 py-1 rounded text-xs disabled:opacity-30">上一页</button>
-                            <button disabled={browsePage * 20 >= browseData.total} onClick={() => handleBrowse(browseDsId, browsePage + 1, browseTable)}
+                            <span className="text-xs text-gray-400 px-2">{browsePage} / {Math.max(1, Math.ceil(browseData.total / 20))}</span>
+                            <button disabled={browsePage * 20 >= browseData.total} onClick={() => handleBrowsePage(browsePage + 1)}
                                 className="btn-ghost text-brand-300 px-3 py-1 rounded text-xs disabled:opacity-30">下一页</button>
+                            <button disabled={browsePage * 20 >= browseData.total} onClick={() => handleBrowsePage(Math.ceil(browseData.total / 20))}
+                                className="btn-ghost text-brand-300 px-2 py-1 rounded text-xs disabled:opacity-30">末页</button>
                         </div>
                     </div>
                 </Modal>
@@ -864,21 +943,40 @@ function RulesPage() {
     );
 }
 
+const DIMENSION_LABELS = {
+    QUALITY_BAD_EFFECTIVENESS: '有效性',
+    QUALITY_BAD_FLUENCY: '流畅性',
+    QUALITY_BAD_UNDERSTANDABILITY: '可理解性',
+    QUALITY_BAD_COMPLETENESS: '完整性',
+    QUALITY_BAD_SIMILARITY: '相似度',
+    QUALITY_BAD_SECURITY: '安全性',
+    QUALITY_BAD_RELEVANCE: '相关性',
+};
+
 function TasksPage() {
     const [tasks, setTasks] = useState([]);
     const [datasources, setDatasources] = useState([]);
     const [rules, setRules] = useState([]);
     const [modal, setModal] = useState(false);
-    const [form, setForm] = useState({ name: '', datasource_id: '', rule_ids: [], field_mapping: {} });
+    const [form, setForm] = useState({ name: '', datasource_id: '', table_name: '', rule_ids: [], field_mapping: {}, rule_configs: [], sampling: { mode: 'full', size: null, seed: null } });
     const [reportData, setReportData] = useState(null);
     const [pollId, setPollId] = useState(null);
+    const [ruleDefaultConfigs, setRuleDefaultConfigs] = useState({});
+    const [expandedRules, setExpandedRules] = useState({});
+    const [schemaIndex, setSchemaIndex] = useState({});
+    const [expandedGroups, setExpandedGroups] = useState({});
+    const [step, setStep] = useState(1);
+    const [activeDimension, setActiveDimension] = useState(null);
+    const [selectedRuleId, setSelectedRuleId] = useState(null);
+    const [searchQuery, setSearchQuery] = useState('');
 
     const load = useCallback(() => {
         Promise.all([
             fetchJSON('/api/tasks'),
             fetchJSON('/api/datasources'),
             fetchJSON('/api/rules'),
-        ]).then(([t, ds, r]) => { setTasks(t); setDatasources(ds); setRules(r); }).catch(console.error);
+            fetchJSON('/api/datasources/schema-index'),
+        ]).then(([t, ds, r, si]) => { setTasks(t); setDatasources(ds); setRules(r); setSchemaIndex(si); }).catch(console.error);
     }, []);
 
     useEffect(() => { load(); }, [load]);
@@ -894,13 +992,59 @@ function TasksPage() {
         }
     }, [tasks, pollId, load]);
 
+    const getDsSchema = () => {
+        if (!form.datasource_id) return null;
+        const key = Object.keys(schemaIndex).find(k => k.startsWith(`${form.datasource_id}:`));
+        return key ? schemaIndex[key] : null;
+    };
+
+    const getAvailableTables = () => {
+        const ds = getDsSchema();
+        if (!ds) return [];
+        return Object.keys(ds.tables || {});
+    };
+
+    const getAvailableColumns = () => {
+        const ds = getDsSchema();
+        if (!ds || !form.table_name) return [];
+        return ds.tables[form.table_name] || [];
+    };
+
+    const fetchRuleDefaultConfig = async (rid) => {
+        if (ruleDefaultConfigs[rid]) return;
+        try {
+            const res = await fetchJSON(`/api/rules/${rid}/default-config`);
+            setRuleDefaultConfigs(prev => ({ ...prev, [rid]: res }));
+        } catch (e) {
+            console.error('Failed to fetch rule config:', e);
+        }
+    };
+
     const handleCreate = async () => {
+        const rule_configs = form.rule_ids.map(rid => {
+            const rc = form.rule_configs.find(c => c.rule_id === rid);
+            const rule = rules.find(r => r.id === rid);
+            return {
+                rule_id: rid,
+                name: rule?.name || rc?.name || '',
+                target_field: rc?.target_field || 'content',
+                config: rc?.config || {},
+            };
+        }).filter(rc => rc.name);
+        const samplingPayload = form.sampling.mode !== 'full' && form.sampling.size ? form.sampling : null;
         await fetchJSON('/api/tasks', {
             method: 'POST',
-            body: JSON.stringify({ ...form, datasource_id: parseInt(form.datasource_id) }),
+            body: JSON.stringify({ ...form, datasource_id: parseInt(form.datasource_id), rule_configs, sampling: samplingPayload }),
         });
         setModal(false);
-        setForm({ name: '', datasource_id: '', rule_ids: [], field_mapping: {} });
+        setForm({ name: '', datasource_id: '', table_name: '', rule_ids: [], field_mapping: {}, rule_configs: [], sampling: { mode: 'full', size: null, seed: null } });
+        setRuleDefaultConfigs({});
+        setExpandedRules({});
+        setExpandedGroups({});
+        setStep(1);
+        setActiveDimension(null);
+        setSelectedRuleId(null);
+        setSearchQuery('');
         load();
     };
 
@@ -926,11 +1070,280 @@ function TasksPage() {
     };
 
     const toggleRule = (rid) => {
+        setForm(f => {
+            const newIds = f.rule_ids.includes(rid)
+                ? f.rule_ids.filter(id => id !== rid)
+                : [...f.rule_ids, rid];
+            const newConfigs = f.rule_configs.filter(c => c.rule_id !== rid);
+            if (!f.rule_ids.includes(rid)) {
+                const rule = rules.find(r => r.id === rid);
+                const columns = getAvailableColumns();
+                const defaultField = columns.length > 0 ? columns[0] : 'content';
+                newConfigs.push({ rule_id: rid, name: rule?.name || '', target_field: defaultField, config: {} });
+                fetchRuleDefaultConfig(rid);
+            }
+            return { ...f, rule_ids: newIds, rule_configs: newConfigs };
+        });
+    };
+
+    const updateRuleConfig = (rid, key, value) => {
         setForm(f => ({
             ...f,
-            rule_ids: f.rule_ids.includes(rid) ? f.rule_ids.filter(id => id !== rid) : [...f.rule_ids, rid],
+            rule_configs: f.rule_configs.map(rc =>
+                rc.rule_id === rid ? { ...rc, [key]: value } : rc
+            ),
         }));
     };
+
+    const updateRuleConfigField = (rid, fieldKey, value) => {
+        setForm(f => ({
+            ...f,
+            rule_configs: f.rule_configs.map(rc =>
+                rc.rule_id === rid ? { ...rc, config: { ...rc.config, [fieldKey]: value } } : rc
+            ),
+        }));
+    };
+
+    const toggleExpand = (rid) => {
+        setExpandedRules(prev => ({ ...prev, [rid]: !prev[rid] }));
+    };
+
+    const toggleGroup = (group) => {
+        setExpandedGroups(prev => ({ ...prev, [group]: !prev[group] }));
+    };
+
+    const addListItem = (rid, fieldKey) => {
+        setForm(f => ({
+            ...f,
+            rule_configs: f.rule_configs.map(rc => {
+                if (rc.rule_id !== rid) return rc;
+                const list = rc.config[fieldKey] || [];
+                return { ...rc, config: { ...rc.config, [fieldKey]: [...list, ''] } };
+            }),
+        }));
+    };
+
+    const removeListItem = (rid, fieldKey, idx) => {
+        setForm(f => ({
+            ...f,
+            rule_configs: f.rule_configs.map(rc => {
+                if (rc.rule_id !== rid) return rc;
+                const list = (rc.config[fieldKey] || []).filter((_, i) => i !== idx);
+                return { ...rc, config: { ...rc.config, [fieldKey]: list } };
+            }),
+        }));
+    };
+
+    const updateListItem = (rid, fieldKey, idx, value) => {
+        setForm(f => ({
+            ...f,
+            rule_configs: f.rule_configs.map(rc => {
+                if (rc.rule_id !== rid) return rc;
+                const list = (rc.config[fieldKey] || []).map((item, i) => i === idx ? value : item);
+                return { ...rc, config: { ...rc.config, [fieldKey]: list } };
+            }),
+        }));
+    };
+
+    // 导出配置功能
+    const exportConfig = () => {
+        if (form.rule_ids.length === 0) {
+            alert('请先选择要导出的规则');
+            return;
+        }
+
+        const configData = {
+            version: '1.0',
+            exported_at: new Date().toISOString(),
+            rule_ids: form.rule_ids,
+            rule_configs: form.rule_configs
+        };
+
+        const blob = new Blob([JSON.stringify(configData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        a.href = url;
+        a.download = `rule-config-${timestamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    // 导入配置功能
+    const importConfig = (file) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const configData = JSON.parse(e.target.result);
+                
+                // 验证格式
+                if (!configData.rule_ids || !Array.isArray(configData.rule_ids)) {
+                    throw new Error('无效的配置文件格式');
+                }
+
+                // 验证规则是否存在
+                const validRuleIds = configData.rule_ids.filter(rid => {
+                    return rules.some(r => r.id === rid);
+                });
+
+                if (validRuleIds.length === 0) {
+                    alert('配置文件中的规则在当前系统中不存在');
+                    return;
+                }
+
+                // 过滤有效的配置
+                const validConfigs = (configData.rule_configs || []).filter(rc => 
+                    validRuleIds.includes(rc.rule_id)
+                );
+
+                // 设置表单
+                setForm(f => ({
+                    ...f,
+                    rule_ids: validRuleIds,
+                    rule_configs: validConfigs.length > 0 ? validConfigs : validRuleIds.map(rid => {
+                        const rule = rules.find(r => r.id === rid);
+                        const columns = getAvailableColumns();
+                        const defaultField = columns.length > 0 ? columns[0] : 'content';
+                        return {
+                            rule_id: rid,
+                            name: rule?.name || '',
+                            target_field: defaultField,
+                            config: {}
+                        };
+                    })
+                }));
+
+                // 获取每个规则的默认配置
+                validRuleIds.forEach(rid => fetchRuleDefaultConfig(rid));
+
+                alert(`成功导入 ${validRuleIds.length} 条规则配置`);
+            } catch (err) {
+                alert('导入配置失败: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+    };
+
+    // 从现有任务复制配置
+    const copyFromTask = (task) => {
+        let ruleIds = [];
+        let ruleConfigs = [];
+
+        try {
+            // 解析 rule_ids (可能是字符串或数组)
+            if (typeof task.rule_ids === 'string') {
+                ruleIds = JSON.parse(task.rule_ids);
+            } else if (Array.isArray(task.rule_ids)) {
+                ruleIds = task.rule_ids;
+            }
+
+            // 使用任务的 rule_configs
+            ruleConfigs = task.rule_configs || [];
+        } catch (err) {
+            console.error('解析任务配置失败:', err);
+        }
+
+        if (ruleIds.length === 0) {
+            alert('该任务没有可复制的规则配置');
+            return;
+        }
+
+        // 验证规则是否存在
+        const validRuleIds = ruleIds.filter(rid => rules.some(r => r.id === rid));
+        
+        if (validRuleIds.length === 0) {
+            alert('该任务的规则在当前系统中不存在');
+            return;
+        }
+
+        // 过滤有效的配置
+        const validConfigs = ruleConfigs.filter(rc => validRuleIds.includes(rc.rule_id));
+
+        // 打开创建任务模态框并填充配置
+        setModal(true);
+        setStep(1);
+        setForm(f => ({
+            ...f,
+            name: task.name + ' (副本)',
+            rule_ids: validRuleIds,
+            rule_configs: validConfigs.length > 0 ? validConfigs : validRuleIds.map(rid => {
+                const rule = rules.find(r => r.id === rid);
+                const columns = getAvailableColumns();
+                const defaultField = columns.length > 0 ? columns[0] : 'content';
+                return {
+                    rule_id: rid,
+                    name: rule?.name || '',
+                    target_field: defaultField,
+                    config: {}
+                };
+            })
+        }));
+
+        // 获取每个规则的默认配置
+        validRuleIds.forEach(rid => fetchRuleDefaultConfig(rid));
+    };
+
+    const renderConfigField = (rid, field) => {
+        const rc = form.rule_configs.find(c => c.rule_id === rid);
+        if (!rc) return null;
+        const currentValue = rc.config[field.key];
+
+        if (field.type === 'number') {
+            return (
+                <div key={field.key} className="mb-2">
+                    <label className="block text-xs text-gray-400 mb-1">{field.label}</label>
+                    <input type="number" step="any" className="input-field w-full rounded-lg px-3 py-1.5 text-white text-sm"
+                        value={currentValue !== undefined ? currentValue : field.default}
+                        onChange={e => updateRuleConfigField(rid, field.key, parseFloat(e.target.value))}
+                        placeholder={String(field.default)} />
+                </div>
+            );
+        }
+
+        if (field.type === 'text') {
+            return (
+                <div key={field.key} className="mb-2">
+                    <label className="block text-xs text-gray-400 mb-1">{field.label}</label>
+                    <input className="input-field w-full rounded-lg px-3 py-1.5 text-white text-sm font-mono"
+                        value={currentValue !== undefined ? currentValue : field.default}
+                        onChange={e => updateRuleConfigField(rid, field.key, e.target.value)}
+                        placeholder={String(field.default)} />
+                </div>
+            );
+        }
+
+        if (field.type === 'list') {
+            const items = currentValue || field.default || [];
+            return (
+                <div key={field.key} className="mb-2">
+                    <label className="block text-xs text-gray-400 mb-1">{field.label}</label>
+                    <div className="space-y-1">
+                        {items.map((item, idx) => (
+                            <div key={idx} className="flex items-center gap-1">
+                                <input className="input-field flex-1 rounded-lg px-2 py-1 text-white text-xs font-mono"
+                                    value={item} onChange={e => updateListItem(rid, field.key, idx, e.target.value)} />
+                                <button onClick={() => removeListItem(rid, field.key, idx)}
+                                    className="text-coral hover:text-red-400 text-sm leading-none">&times;</button>
+                            </div>
+                        ))}
+                        <button onClick={() => addListItem(rid, field.key)}
+                            className="btn-ghost text-brand-300 px-2 py-1 rounded text-xs w-full">+ 添加</button>
+                    </div>
+                </div>
+            );
+        }
+
+        return null;
+    };
+
+    const groupedRules = {};
+    rules.forEach(r => {
+        const mt = r.metric_type || 'other';
+        if (!groupedRules[mt]) groupedRules[mt] = [];
+        groupedRules[mt].push(r);
+    });
 
     return (
         <div className="fade-in">
@@ -948,8 +1361,17 @@ function TasksPage() {
                                 <div className="flex items-center gap-3">
                                     <div className="font-display text-white font-semibold text-lg">{t.name}</div>
                                     <span className={`badge ${st.color}`}>{st.label}</span>
+                                    {t.table_name && <span className="badge bg-surface-300 text-gray-400 text-[0.65rem]">{t.table_name}</span>}
+                                    {t.sampling && t.sampling.mode !== 'full' && (
+                                        <span className="badge bg-amber/15 text-amber text-[0.65rem]">
+                                            {t.sampling.mode === 'random' ? `随机抽样 ${t.sampling.size}条` : `前${t.sampling.size}条`}
+                                        </span>
+                                    )}
                                 </div>
                                 <div className="flex items-center gap-2">
+                                    <button onClick={() => copyFromTask(t)} className="btn-ghost text-amber px-3 py-1.5 rounded-lg text-xs" title="复制此任务的规则配置">
+                                        📋 复制配置
+                                    </button>
                                     {t.status === 'pending' && (
                                         <button onClick={() => handleStart(t.id)} className="btn-primary text-white px-3 py-1.5 rounded-lg text-xs">启动</button>
                                     )}
@@ -959,12 +1381,23 @@ function TasksPage() {
                                     {t.status === 'completed' && (
                                         <>
                                             <button onClick={() => handleReport(t.id)} className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs">查看报告</button>
-                                            <a href={API + `/api/tasks/${t.id}/download`} className="btn-ghost text-sky px-3 py-1.5 rounded-lg text-xs inline-block">下载问题数据</a>
+                                            <a href={API + `/api/tasks/${t.id}/download-csv`} className="btn-ghost text-sky px-3 py-1.5 rounded-lg text-xs inline-block">下载问题数据</a>
                                         </>
                                     )}
                                     <button onClick={() => handleDelete(t.id)} className="btn-ghost text-coral px-3 py-1.5 rounded-lg text-xs">删除</button>
                                 </div>
                             </div>
+
+                            {t.rule_configs && t.rule_configs.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mb-2">
+                                    {t.rule_configs.map((rc, ri) => (
+                                        <span key={ri} className="badge bg-surface-300 text-gray-400 text-[0.65rem]">
+                                            {rc.name} → {rc.target_field || 'content'}
+                                            {rc.config && Object.keys(rc.config).length > 0 && ' ⚙️'}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
 
                             {t.status === 'running' && (
                                 <div className="mb-3">
@@ -999,47 +1432,405 @@ function TasksPage() {
                 {tasks.length === 0 && <div className="text-center text-gray-500 py-12">暂无任务，点击右上角创建</div>}
             </div>
 
-            <Modal open={modal} onClose={() => setModal(false)} title="创建检测任务">
-                <div className="space-y-4">
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">任务名称</label>
-                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
-                            onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="输入任务名称" />
-                    </div>
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">数据源</label>
-                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.datasource_id}
-                            onChange={e => setForm(f => ({ ...f, datasource_id: e.target.value }))}>
-                            <option value="">选择数据源</option>
-                            {datasources.map(ds => <option key={ds.id} value={ds.id}>{ds.name} ({DS_TYPE_MAP[ds.type]?.label})</option>)}
-                        </select>
-                    </div>
-                    <div>
-                        <label className="block text-sm text-gray-400 mb-1">选择规则</label>
-                        <div className="max-h-60 overflow-y-auto space-y-1 p-2 bg-surface-0 rounded-lg">
-                            {rules.map((r, i) => {
-                                const c = getDimColor(r.metric_type);
-                                const checked = form.rule_ids.includes(r.id);
-                                return (
-                                    <label key={`${r.id}-${i}`} className={`flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors ${checked ? 'bg-brand-800/30' : 'hover:bg-surface-200'}`}>
-                                        <input type="checkbox" checked={checked} onChange={() => toggleRule(r.id)}
-                                            className="rounded border-brand-600 bg-surface-0 text-brand-500 focus:ring-brand-500" />
-                                        <span className="text-sm text-white">{r.name}</span>
-                                        <span className="badge ml-auto" style={{ background: c.bg, color: c.text, fontSize: '0.6rem' }}>
-                                            {r.metric_type.replace('QUALITY_BAD_', '').substring(0, 10)}
-                                        </span>
-                                    </label>
-                                );
-                            })}
+            <Modal open={modal} onClose={() => { setModal(false); setStep(1); setActiveDimension(null); setSelectedRuleId(null); setSearchQuery(''); setRuleDefaultConfigs({}); setExpandedRules({}); setExpandedGroups({}); }} title="创建检测任务" wide={step >= 2}>
+                {step === 1 && (
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-brand-600 text-white flex items-center justify-center text-xs font-bold">1</div>
+                                <span className="text-sm font-medium text-white">数据配置</span>
+                            </div>
+                            <div className="flex-1 h-px bg-surface-300"></div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-surface-300 text-gray-500 flex items-center justify-center text-xs font-bold">2</div>
+                                <span className="text-sm text-gray-500">规则配置</span>
+                            </div>
+                            <div className="flex-1 h-px bg-surface-300"></div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-surface-300 text-gray-500 flex items-center justify-center text-xs font-bold">3</div>
+                                <span className="text-sm text-gray-500">规则确认</span>
+                            </div>
                         </div>
-                        <div className="text-xs text-gray-500 mt-1">已选 {form.rule_ids.length} 条规则</div>
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">任务名称</label>
+                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
+                                onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="输入任务名称" />
+                        </div>
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">数据源</label>
+                            <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.datasource_id}
+                                onChange={e => setForm(f => ({ ...f, datasource_id: e.target.value, table_name: '' }))}>
+                                <option value="">选择数据源</option>
+                                {datasources.map(ds => {
+                                    const dsSchema = Object.keys(schemaIndex).find(k => k.startsWith(`${ds.id}:`));
+                                    const dbName = dsSchema ? schemaIndex[dsSchema]?.db_name : ds.config?.database;
+                                    return <option key={ds.id} value={ds.id}>{ds.name} ({DS_TYPE_MAP[ds.type]?.label}{dbName ? ` · ${dbName}` : ''})</option>;
+                                })}
+                            </select>
+                        </div>
+                        {form.datasource_id && getAvailableTables().length > 0 && (
+                            <div>
+                                <label className="block text-sm text-gray-400 mb-1">选择表</label>
+                                <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.table_name}
+                                    onChange={e => setForm(f => ({ ...f, table_name: e.target.value }))}>
+                                    <option value="">选择表</option>
+                                    {getAvailableTables().map(t => <option key={t} value={t}>{t}</option>)}
+                                </select>
+                            </div>
+                        )}
+                        <div>
+                            <label className="block text-sm text-gray-400 mb-1">数据范围</label>
+                            <div className="space-y-2 p-3 bg-surface-0 rounded-lg">
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="sampling_mode" checked={form.sampling.mode === 'full'}
+                                        onChange={() => setForm(f => ({ ...f, sampling: { ...f.sampling, mode: 'full' } }))}
+                                        className="text-brand-500 bg-surface-0 border-brand-600 focus:ring-brand-500" />
+                                    <span className="text-sm text-white">全量检测</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="sampling_mode" checked={form.sampling.mode === 'random'}
+                                        onChange={() => setForm(f => ({ ...f, sampling: { ...f.sampling, mode: 'random' } }))}
+                                        className="text-brand-500 bg-surface-0 border-brand-600 focus:ring-brand-500" />
+                                    <span className="text-sm text-white">随机抽样</span>
+                                </label>
+                                <label className="flex items-center gap-2 cursor-pointer">
+                                    <input type="radio" name="sampling_mode" checked={form.sampling.mode === 'first_n'}
+                                        onChange={() => setForm(f => ({ ...f, sampling: { ...f.sampling, mode: 'first_n' } }))}
+                                        className="text-brand-500 bg-surface-0 border-brand-600 focus:ring-brand-500" />
+                                    <span className="text-sm text-white">取前N条</span>
+                                </label>
+                                {form.sampling.mode !== 'full' && (
+                                    <div className="ml-6 space-y-2 fade-in">
+                                        <div className="flex items-center gap-2">
+                                            <label className="text-xs text-gray-400 w-12">数量</label>
+                                            <input type="number" min="1" className="input-field w-32 rounded-lg px-3 py-1.5 text-white text-sm"
+                                                value={form.sampling.size || ''}
+                                                onChange={e => setForm(f => ({ ...f, sampling: { ...f.sampling, size: parseInt(e.target.value) || null } }))}
+                                                placeholder="抽取条数" />
+                                            <span className="text-xs text-gray-500">条</span>
+                                        </div>
+                                        {form.sampling.mode === 'random' && (
+                                            <div className="flex items-center gap-2">
+                                                <label className="text-xs text-gray-400 w-12">种子</label>
+                                                <input type="number" className="input-field w-32 rounded-lg px-3 py-1.5 text-white text-sm"
+                                                    value={form.sampling.seed || ''}
+                                                    onChange={e => setForm(f => ({ ...f, sampling: { ...f.sampling, seed: parseInt(e.target.value) || null } }))}
+                                                    placeholder="可选，留空随机" />
+                                                <span className="text-xs text-gray-500">可复现</span>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                            {form.sampling.mode !== 'full' && form.sampling.size && (
+                                <div className="text-xs text-gray-500 mt-1">
+                                    {form.sampling.mode === 'random' ? `将从数据集中随机抽取 ${form.sampling.size} 条进行检测` : `将取数据集前 ${form.sampling.size} 条进行检测`}
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex justify-end gap-3 pt-2">
+                            <button onClick={() => { setModal(false); setStep(1); setActiveDimension(null); setSelectedRuleId(null); setSearchQuery(''); setRuleDefaultConfigs({}); setExpandedRules({}); setExpandedGroups({}); }} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                            <button onClick={() => {
+                                setStep(2);
+                            }} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
+                                disabled={!form.name || !form.datasource_id}>下一步 →</button>
+                        </div>
                     </div>
-                    <div className="flex justify-end gap-3 pt-2">
-                        <button onClick={() => setModal(false)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
-                        <button onClick={handleCreate} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
-                            disabled={!form.name || !form.datasource_id || form.rule_ids.length === 0}>创建</button>
+                )}
+                {step === 2 && (() => {
+                    const searchFilteredRules = searchQuery
+                        ? rules.filter(r => r.name.toLowerCase().includes(searchQuery.toLowerCase()) || (r.description && r.description.toLowerCase().includes(searchQuery.toLowerCase())))
+                        : null;
+                    const selectedRule = selectedRuleId ? rules.find(r => r.id === selectedRuleId) : null;
+                    const selectedRc = selectedRuleId ? form.rule_configs.find(c => c.rule_id === selectedRuleId) : null;
+                    const selectedDefaultCfg = selectedRuleId ? ruleDefaultConfigs[selectedRuleId] : null;
+                    const columns = getAvailableColumns();
+
+                    return (
+                        <div className="space-y-0">
+                            <div className="flex items-center gap-3 mb-4">
+                                <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep(1)}>
+                                    <div className="w-7 h-7 rounded-full bg-mint/20 text-mint flex items-center justify-center text-xs font-bold">✓</div>
+                                    <span className="text-sm text-mint">数据配置</span>
+                                </div>
+                                <div className="flex-1 h-px bg-brand-600"></div>
+                                <div className="flex items-center gap-2">
+                                    <div className="w-7 h-7 rounded-full bg-brand-600 text-white flex items-center justify-center text-xs font-bold">2</div>
+                                    <span className="text-sm font-medium text-white">规则配置</span>
+                                </div>
+                                <div className="flex-1 h-px bg-surface-300"></div>
+                                <div className="flex items-center gap-2">
+                                    <div className="w-7 h-7 rounded-full bg-surface-300 text-gray-500 flex items-center justify-center text-xs font-bold">3</div>
+                                    <span className="text-sm text-gray-500">规则确认</span>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 mb-3">
+                                <div className="relative flex-1">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500 text-sm">🔍</span>
+                                    <input className="input-field w-full rounded-lg pl-9 pr-3 py-2 text-white text-sm" value={searchQuery}
+                                        onChange={e => setSearchQuery(e.target.value)} placeholder="搜索规则名称或描述..." />
+                                    {searchQuery && (
+                                        <button onClick={() => setSearchQuery('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white text-sm">&times;</button>
+                                    )}
+                                </div>
+                                <div className="text-xs text-gray-400 whitespace-nowrap">
+                                    已选 <span className="text-brand-300 font-bold">{form.rule_ids.length}</span> 条规则
+                                </div>
+                                <div className="flex gap-2">
+                                    <input type="file" accept=".json" id="importConfig" className="hidden"
+                                        onChange={e => {
+                                            if (e.target.files && e.target.files[0]) {
+                                                importConfig(e.target.files[0]);
+                                                e.target.value = '';
+                                            }
+                                        }} />
+                                    <button onClick={() => document.getElementById('importConfig').click()}
+                                        className="btn-ghost text-amber px-3 py-1.5 rounded-lg text-xs whitespace-nowrap">
+                                        📥 导入配置
+                                    </button>
+                                    <button onClick={exportConfig}
+                                        className="btn-ghost text-mint px-3 py-1.5 rounded-lg text-xs whitespace-nowrap">
+                                        📤 导出配置
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-3" style={{ minHeight: 360 }}>
+                                <div className="w-64 flex-shrink-0 bg-surface-0 rounded-lg overflow-y-auto" style={{ maxHeight: 360 }}>
+                                    {searchQuery ? (
+                                        <div>
+                                            <div className="px-3 py-2 text-xs font-medium text-amber border-b border-surface-300">
+                                                搜索结果 ({searchFilteredRules.length})
+                                            </div>
+                                            {searchFilteredRules.length === 0 && (
+                                                <div className="text-xs text-gray-600 text-center py-6">无匹配规则</div>
+                                            )}
+                                            {searchFilteredRules.map(r => {
+                                                const checked = form.rule_ids.includes(r.id);
+                                                const isSelected = selectedRuleId === r.id;
+                                                return (
+                                                    <div key={r.id}
+                                                        className={`flex items-start gap-2 px-3 py-2 cursor-pointer transition-colors border-l-2 ${isSelected ? 'bg-brand-800/20 border-brand-500' : checked ? 'bg-surface-200/50 border-transparent' : 'border-transparent hover:bg-surface-200/30'}`}
+                                                        onClick={() => { setSelectedRuleId(r.id); fetchRuleDefaultConfig(r.id); }}>
+                                                        <input type="checkbox" checked={checked}
+                                                            onChange={e => { e.stopPropagation(); toggleRule(r.id); }}
+                                                            className="rounded border-brand-600 bg-surface-0 text-brand-500 focus:ring-brand-500 mt-0.5" />
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className={`text-xs font-medium truncate ${checked ? 'text-white' : 'text-gray-300'}`}>{r.name}</div>
+                                                            {r.description && <div className="text-[10px] text-gray-500 truncate mt-0.5">{r.description}</div>}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        Object.entries(groupedRules).map(([mt, grs]) => {
+                                            const dc = getDimColor(mt);
+                                            const label = DIMENSION_LABELS[mt] || mt.replace('QUALITY_BAD_', '');
+                                            const isExpanded = expandedGroups[mt] !== false;
+                                            const selectedCount = grs.filter(r => form.rule_ids.includes(r.id)).length;
+                                            return (
+                                                <div key={mt}>
+                                                    <div className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-surface-200/30 transition-colors border-l-2 border-transparent"
+                                                        onClick={() => toggleGroup(mt)}>
+                                                        <span className="text-[10px]" style={{ color: dc.text }}>{isExpanded ? '▼' : '▶'}</span>
+                                                        <span className="text-xs font-medium flex-1" style={{ color: dc.text }}>{label}</span>
+                                                        <span className="text-[10px] text-gray-500">{grs.length}</span>
+                                                        {selectedCount > 0 && (
+                                                            <span className="px-1 rounded text-[10px]" style={{ background: dc.bg, color: dc.text }}>{selectedCount}</span>
+                                                        )}
+                                                    </div>
+                                                    {isExpanded && grs.map(r => {
+                                                        const checked = form.rule_ids.includes(r.id);
+                                                        const isSelected = selectedRuleId === r.id;
+                                                        return (
+                                                            <div key={r.id}
+                                                                className={`flex items-start gap-2 px-3 py-1.5 cursor-pointer transition-colors border-l-2 ${isSelected ? 'bg-brand-800/20 border-brand-500' : checked ? 'bg-surface-200/50 border-transparent' : 'border-transparent hover:bg-surface-200/30'}`}
+                                                                onClick={() => { setSelectedRuleId(r.id); fetchRuleDefaultConfig(r.id); }}>
+                                                                <input type="checkbox" checked={checked}
+                                                                    onChange={e => { e.stopPropagation(); toggleRule(r.id); }}
+                                                                    className="rounded border-brand-600 bg-surface-0 text-brand-500 focus:ring-brand-500 mt-0.5" />
+                                                                <div className="flex-1 min-w-0">
+                                                                    <div className={`text-xs font-medium truncate ${checked ? 'text-white' : 'text-gray-300'}`}>{r.name}</div>
+                                                                    {r.description && <div className="text-[10px] text-gray-500 truncate mt-0.5">{r.description}</div>}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+
+                                <div className="flex-1 bg-surface-0 rounded-lg p-4 overflow-y-auto" style={{ maxHeight: 360 }}>
+                                    {selectedRule ? (
+                                        <div className="fade-in">
+                                            <div className="flex items-center gap-2 mb-3">
+                                                <h4 className="text-sm font-semibold text-white">{selectedRule.name}</h4>
+                                                {selectedRule.is_builtin && <span className="badge bg-brand-800/50 text-brand-300 text-[0.6rem]">内置</span>}
+                                            </div>
+                                            {selectedRule.description && (
+                                                <div className="text-xs text-gray-400 mb-3 leading-relaxed">{selectedRule.description}</div>
+                                            )}
+                                            <div className="mb-3">
+                                                <span className="text-[10px] text-gray-500">质量维度</span>
+                                                <span className="ml-2 text-xs" style={{ color: getDimColor(selectedRule.metric_type).text }}>
+                                                    {DIMENSION_LABELS[selectedRule.metric_type] || selectedRule.metric_type?.replace('QUALITY_BAD_', '')}
+                                                </span>
+                                            </div>
+
+                                            <div className="border-t border-surface-300 pt-3 mb-3">
+                                                <label className="block text-[10px] text-gray-400 mb-1.5">目标字段</label>
+                                                {columns.length > 0 ? (
+                                                    <div className="flex flex-wrap gap-1">
+                                                        {columns.map(col => {
+                                                            const isFieldSelected = (selectedRc?.target_field || '').split(',').map(s => s.trim()).includes(col);
+                                                            return (
+                                                                <label key={col} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] cursor-pointer transition-colors ${isFieldSelected ? 'bg-brand-700/40 text-brand-300' : 'bg-surface-300 text-gray-400 hover:bg-surface-200'}`}>
+                                                                    <input type="checkbox" checked={isFieldSelected}
+                                                                        onChange={e => {
+                                                                            const current = (selectedRc?.target_field || '').split(',').map(s => s.trim()).filter(Boolean);
+                                                                            const next = e.target.checked ? [...current, col] : current.filter(c => c !== col);
+                                                                            updateRuleConfig(selectedRuleId, 'target_field', next.join(','));
+                                                                        }}
+                                                                        className="sr-only" />
+                                                                    {col}
+                                                                </label>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                ) : (
+                                                    <input className="input-field w-full rounded-lg px-2 py-1 text-white text-xs"
+                                                        value={selectedRc?.target_field || 'content'}
+                                                        onChange={e => updateRuleConfig(selectedRuleId, 'target_field', e.target.value)}
+                                                        placeholder="content" />
+                                                )}
+                                            </div>
+
+                                            {selectedDefaultCfg ? (
+                                                selectedDefaultCfg.configurable_fields?.length > 0 ? (
+                                                    <div className="border-t border-surface-300 pt-3">
+                                                        <div className="text-[10px] text-gray-400 mb-2">参数配置</div>
+                                                        {selectedDefaultCfg.configurable_fields.map(field => renderConfigField(selectedRuleId, field))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="border-t border-surface-300 pt-3">
+                                                        <div className="text-[10px] text-gray-600">此规则无可配置参数</div>
+                                                    </div>
+                                                )
+                                            ) : (
+                                                <div className="border-t border-surface-300 pt-3">
+                                                    <div className="text-[10px] text-gray-600">加载配置中...</div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <div className="flex flex-col items-center justify-center h-full text-gray-600">
+                                            <div className="text-2xl mb-2">📋</div>
+                                            <div className="text-xs">点击左侧规则查看详情和配置</div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="flex justify-between pt-3 mt-3 border-t border-surface-300">
+                                <button onClick={() => setStep(1)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">← 上一步</button>
+                                <div className="flex gap-3">
+                                    <button onClick={() => { setModal(false); setStep(1); setActiveDimension(null); setSelectedRuleId(null); setSearchQuery(''); setRuleDefaultConfigs({}); setExpandedRules({}); setExpandedGroups({}); }} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                                    <button onClick={() => setStep(3)} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
+                                        disabled={form.rule_ids.length === 0}>下一步 →</button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })()}
+                {step === 3 && (
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-3 mb-4">
+                            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep(1)}>
+                                <div className="w-7 h-7 rounded-full bg-mint/20 text-mint flex items-center justify-center text-xs font-bold">✓</div>
+                                <span className="text-sm text-mint">数据配置</span>
+                            </div>
+                            <div className="flex-1 h-px bg-mint/40"></div>
+                            <div className="flex items-center gap-2 cursor-pointer" onClick={() => setStep(2)}>
+                                <div className="w-7 h-7 rounded-full bg-mint/20 text-mint flex items-center justify-center text-xs font-bold">✓</div>
+                                <span className="text-sm text-mint">规则配置</span>
+                            </div>
+                            <div className="flex-1 h-px bg-brand-600"></div>
+                            <div className="flex items-center gap-2">
+                                <div className="w-7 h-7 rounded-full bg-brand-600 text-white flex items-center justify-center text-xs font-bold">3</div>
+                                <span className="text-sm font-medium text-white">规则确认</span>
+                            </div>
+                        </div>
+
+                        <div className="text-xs text-gray-400 mb-2">
+                            已选择 <span className="text-brand-300 font-bold">{form.rule_ids.length}</span> 条规则
+                        </div>
+
+                        {form.rule_ids.length === 0 ? (
+                            <div className="text-center py-12 text-gray-600">
+                                <div className="text-2xl mb-2">📭</div>
+                                <div className="text-xs">暂无已选规则，请返回上一步选择</div>
+                            </div>
+                        ) : (
+                            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                                {form.rule_ids.map(rid => {
+                                    const rule = rules.find(r => r.id === rid);
+                                    const rc = form.rule_configs.find(c => c.rule_id === rid);
+                                    const dc = getDimColor(rule?.metric_type);
+                                    const dimLabel = rule ? (DIMENSION_LABELS[rule.metric_type] || rule.metric_type?.replace('QUALITY_BAD_', '')) : '';
+                                    const defaultCfg = ruleDefaultConfigs[rid];
+                                    const configFields = defaultCfg?.configurable_fields || [];
+                                    const configValues = rc?.config || {};
+
+                                    return (
+                                        <div key={rid} className="bg-surface-0 rounded-lg p-3 border border-surface-300 hover:border-brand-800/30 transition-colors">
+                                            <div className="flex items-center gap-2 mb-2">
+                                                <span className="text-sm font-semibold text-white flex-1">{rule?.name || rid}</span>
+                                                {dimLabel && (
+                                                    <span className="text-[10px] px-2 py-0.5 rounded" style={{ background: dc.bg, color: dc.text }}>{dimLabel}</span>
+                                                )}
+                                                <button onClick={() => toggleRule(rid)}
+                                                    className="text-gray-500 hover:text-coral transition-colors text-sm px-1 leading-none"
+                                                    title="移除此规则">&times;</button>
+                                            </div>
+                                            <div className="space-y-1 text-xs">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-gray-500 w-16 flex-shrink-0">目标字段</span>
+                                                    <span className="text-gray-300">{rc?.target_field || 'content'}</span>
+                                                </div>
+                                                {configFields.length > 0 ? (
+                                                    configFields.map(field => (
+                                                        <div key={field.key} className="flex items-center gap-2">
+                                                            <span className="text-gray-500 w-16 flex-shrink-0">{field.label || field.key}</span>
+                                                            <span className="text-gray-300">{configValues[field.key] !== undefined ? String(configValues[field.key]) : String(field.default ?? '')}</span>
+                                                        </div>
+                                                    ))
+                                                ) : (
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-gray-500 w-16 flex-shrink-0">参数</span>
+                                                        <span className="text-gray-600">无</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        <div className="flex justify-between pt-3 mt-3 border-t border-surface-300">
+                            <button onClick={() => setStep(2)} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">← 上一步</button>
+                            <div className="flex gap-3">
+                                <button onClick={() => { setModal(false); setStep(1); setActiveDimension(null); setSelectedRuleId(null); setSearchQuery(''); setRuleDefaultConfigs({}); setExpandedRules({}); setExpandedGroups({}); }} className="btn-ghost text-gray-400 px-4 py-2 rounded-lg text-sm">取消</button>
+                                <button onClick={handleCreate} className="btn-primary text-white px-4 py-2 rounded-lg text-sm"
+                                    disabled={form.rule_ids.length === 0}>确认创建</button>
+                            </div>
+                        </div>
                     </div>
-                </div>
+                )}
             </Modal>
 
             <Modal open={!!reportData} onClose={() => setReportData(null)} title="检测报告">

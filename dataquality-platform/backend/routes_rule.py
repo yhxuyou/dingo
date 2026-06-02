@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.database import get_session
 from backend.models import Rule
 from backend.schemas import RuleCreate, RuleUpdate, RuleResponse
-from backend.engine import get_builtin_rules, get_builtin_rules_grouped
+from backend.engine import get_builtin_rules, get_builtin_rules_grouped, get_rule_default_config
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -310,3 +310,75 @@ async def delete_rule(rule_id: int, session: AsyncSession = Depends(get_session)
     await session.delete(r)
     await session.commit()
     return {"ok": True, "message": f"规则 '{r.name}' 已删除"}
+
+
+@router.get("/{rule_id}/default-config")
+async def get_rule_config(rule_id: int, session: AsyncSession = Depends(get_session)):
+    if rule_id < 0:
+        builtin = get_builtin_rules()
+        idx = abs(rule_id) - 1
+        if 0 <= idx < len(builtin):
+            br = builtin[idx]
+            default_cfg = get_rule_default_config(br["name"])
+            return {
+                "rule_id": rule_id,
+                "name": br["name"],
+                "is_builtin": True,
+                "rule_type": "builtin",
+                "default_config": default_cfg,
+                "configurable_fields": _get_configurable_fields(default_cfg),
+            }
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    r = await session.get(Rule, rule_id)
+    if not r:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    if r.is_builtin:
+        default_cfg = get_rule_default_config(r.name)
+        return {
+            "rule_id": r.id,
+            "name": r.name,
+            "is_builtin": True,
+            "rule_type": r.rule_type,
+            "default_config": default_cfg,
+            "configurable_fields": _get_configurable_fields(default_cfg),
+        }
+
+    return {
+        "rule_id": r.id,
+        "name": r.name,
+        "is_builtin": False,
+        "rule_type": r.rule_type,
+        "default_config": r.config,
+        "configurable_fields": _get_configurable_fields_for_custom(r.rule_type, r.config),
+    }
+
+
+def _get_configurable_fields(default_config: dict) -> list[dict]:
+    fields = []
+    if default_config.get("threshold") is not None:
+        fields.append({"key": "threshold", "label": "阈值", "type": "number", "default": default_config["threshold"]})
+    if default_config.get("pattern") is not None:
+        fields.append({"key": "pattern", "label": "正则表达式", "type": "text", "default": default_config["pattern"]})
+    if default_config.get("key_list") is not None:
+        fields.append({"key": "key_list", "label": "关键词列表", "type": "list", "default": default_config["key_list"]})
+    if default_config.get("refer_path") is not None:
+        fields.append({"key": "refer_path", "label": "引用路径", "type": "list", "default": default_config["refer_path"]})
+    if default_config.get("parameters") is not None:
+        fields.append({"key": "parameters", "label": "额外参数", "type": "json", "default": default_config["parameters"]})
+    return fields
+
+
+def _get_configurable_fields_for_custom(rule_type: str, config: dict) -> list[dict]:
+    fields = []
+    if rule_type == "pattern":
+        fields.append({"key": "patterns", "label": "正则模式列表", "type": "list", "default": config.get("patterns", [])})
+    elif rule_type == "keyword":
+        fields.append({"key": "keywords", "label": "关键词列表", "type": "list", "default": config.get("keywords", [])})
+    elif rule_type == "length":
+        fields.append({"key": "min_length", "label": "最小长度", "type": "number", "default": config.get("min_length", 0)})
+        fields.append({"key": "max_length", "label": "最大长度", "type": "number", "default": config.get("max_length", 999999)})
+    elif rule_type == "regex":
+        fields.append({"key": "pattern", "label": "正则表达式", "type": "text", "default": config.get("pattern", "")})
+    return fields

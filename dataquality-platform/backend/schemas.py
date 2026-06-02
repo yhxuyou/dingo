@@ -75,11 +75,20 @@ class RuleResponse(BaseModel):
         from_attributes = True
 
 
+class SamplingConfig(BaseModel):
+    mode: str = "full"
+    size: Optional[int] = None
+    seed: Optional[int] = None
+
+
 class TaskCreate(BaseModel):
     name: str
     datasource_id: int
     rule_ids: list[int]
     field_mapping: Optional[dict] = None
+    rule_configs: Optional[list[dict]] = None
+    table_name: Optional[str] = None
+    sampling: Optional[SamplingConfig] = None
 
 
 class TaskResponse(BaseModel):
@@ -88,6 +97,9 @@ class TaskResponse(BaseModel):
     datasource_id: int
     rule_ids: str
     field_mapping: dict
+    rule_configs: Optional[list[dict]] = None
+    table_name: Optional[str] = None
+    sampling: Optional[dict] = None
     status: str
     progress: float
     total: int

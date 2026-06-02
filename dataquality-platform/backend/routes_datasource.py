@@ -52,6 +52,113 @@ async def create_datasource(
     return _to_response(ds)
 
 
+@router.get("/schema-index")
+async def schema_index(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Datasource).order_by(Datasource.id))
+    datasources = result.scalars().all()
+
+    index = {}
+    for ds in datasources:
+        ds_type = ds.type.value if isinstance(ds.type, DatasourceType) else ds.type
+        config = ds.config
+        ds_key = f"{ds.id}:{ds.name}"
+
+        if ds_type == "local_file":
+            file_path = config.get("file_path", "")
+            fmt = config.get("format", "jsonl")
+            columns = _get_file_columns(file_path, fmt)
+            if columns:
+                index[ds_key] = {
+                    "ds_id": ds.id,
+                    "ds_name": ds.name,
+                    "ds_type": ds_type,
+                    "db_name": config.get("file_path", "").split("/")[-1].split("\\")[-1] if config.get("file_path") else "",
+                    "tables": {"__file__": columns},
+                }
+            continue
+
+        try:
+            from sqlalchemy import create_engine, inspect as sa_inspect
+            dialect_map = {
+                "mysql": "mysql+pymysql",
+                "postgresql": "postgresql+psycopg2",
+                "oracle": "oracle+cx_oracle",
+                "sqlserver": "mssql+pyodbc",
+                "sqlite": "sqlite",
+            }
+            dialect = dialect_map.get(ds_type, ds_type)
+            password_part = f":{config.get('password', '')}" if config.get("password") else ""
+            port_part = f":{config.get('port', '')}" if config.get("port") else ""
+
+            if ds_type == "sqlite":
+                url = f"sqlite:///{config.get('database', '')}"
+            else:
+                url = (
+                    f"{dialect}://"
+                    f"{config.get('username', '')}{password_part}@"
+                    f"{config.get('host', '')}{port_part}/{config.get('database', '')}"
+                )
+
+            engine = create_engine(url)
+            inspector = sa_inspect(engine)
+            tables = inspector.get_table_names()
+
+            tables_dict = {}
+            for t in tables:
+                cols = inspector.get_columns(t)
+                tables_dict[t] = [c["name"] for c in cols]
+
+            engine.dispose()
+            index[ds_key] = {
+                "ds_id": ds.id,
+                "ds_name": ds.name,
+                "ds_type": ds_type,
+                "db_name": config.get("database", ""),
+                "tables": tables_dict,
+            }
+        except Exception:
+            index[ds_key] = {
+                "ds_id": ds.id,
+                "ds_name": ds.name,
+                "ds_type": ds_type,
+                "db_name": config.get("database", ""),
+                "tables": {},
+            }
+
+    return index
+
+
+def _get_file_columns(file_path: str, fmt: str) -> list[str]:
+    if not os.path.exists(file_path):
+        return []
+    try:
+        if fmt in ("jsonl", "json"):
+            import json as json_mod
+            with open(file_path, "r", encoding="utf-8") as f:
+                if fmt == "json":
+                    data = json_mod.load(f)
+                    if isinstance(data, list) and data:
+                        return list(data[0].keys())
+                    elif isinstance(data, dict):
+                        return list(data.keys())
+                else:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            obj = json_mod.loads(line)
+                            return list(obj.keys())
+        elif fmt == "csv":
+            import csv
+            with open(file_path, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                return reader.fieldnames or []
+        elif fmt == "plaintext":
+            return ["content"]
+    except Exception:
+        pass
+    return []
+
+
 @router.get("/{ds_id}", response_model=DatasourceResponse)
 async def get_datasource(ds_id: int, session: AsyncSession = Depends(get_session)):
     ds = await session.get(Datasource, ds_id)
@@ -187,17 +294,90 @@ async def test_datasource(ds_id: int, session: AsyncSession = Depends(get_sessio
         return DatasourceTestResult(success=False, message=str(e))
 
 
+@router.get("/{ds_id}/tables")
+async def list_tables(ds_id: int, session: AsyncSession = Depends(get_session)):
+    from fastapi import HTTPException
+
+    ds = await session.get(Datasource, ds_id)
+    if not ds:
+        raise HTTPException(status_code=404, detail="Datasource not found")
+
+    ds_type = ds.type.value if isinstance(ds.type, DatasourceType) else ds.type
+    config = ds.config
+
+    if ds_type == "local_file":
+        return {"type": "file", "tables": []}
+
+    try:
+        from sqlalchemy import create_engine, text, inspect
+        dialect_map = {
+            "mysql": "mysql+pymysql",
+            "postgresql": "postgresql+psycopg2",
+            "oracle": "oracle+cx_oracle",
+            "sqlserver": "mssql+pyodbc",
+            "sqlite": "sqlite",
+        }
+        dialect = dialect_map.get(ds_type, ds_type)
+        password_part = f":{config.get('password', '')}" if config.get("password") else ""
+        port_part = f":{config.get('port', '')}" if config.get("port") else ""
+
+        if ds_type == "sqlite":
+            url = f"sqlite:///{config.get('database', '')}"
+        else:
+            url = (
+                f"{dialect}://"
+                f"{config.get('username', '')}{password_part}@"
+                f"{config.get('host', '')}{port_part}/{config.get('database', '')}"
+            )
+
+        engine = create_engine(url)
+        inspector = inspect(engine)
+        tables = inspector.get_table_names()
+        quote_char = "`" if ds_type == "mysql" else '"'
+
+        table_info = []
+        with engine.connect() as conn:
+            for t in tables:
+                try:
+                    count_result = conn.execute(text(f"SELECT COUNT(*) FROM {quote_char}{t}{quote_char}"))
+                    row_count = count_result.scalar()
+                except Exception:
+                    row_count = -1
+                cols = inspector.get_columns(t)
+                table_info.append({
+                    "name": t,
+                    "row_count": row_count,
+                    "column_count": len(cols),
+                    "columns": [c["name"] for c in cols],
+                })
+
+        engine.dispose()
+        return {"type": "database", "tables": table_info}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{ds_id}/browse", response_model=DataBrowseResponse)
 async def browse_data(
-    ds_id: int,
+    ds_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     table: Optional[str] = Query(None),
     session: AsyncSession = Depends(get_session),
 ):
-    ds = await session.get(Datasource, ds_id)
+    from fastapi import HTTPException
+    
+    if ds_id == "null" or not ds_id or ds_id.strip() == "":
+        raise HTTPException(status_code=400, detail="Invalid datasource ID")
+    
+    try:
+        ds_id_int = int(ds_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid datasource ID format")
+    
+    ds = await session.get(Datasource, ds_id_int)
     if not ds:
-        from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Datasource not found")
 
     ds_type = ds.type.value if isinstance(ds.type, DatasourceType) else ds.type
@@ -263,11 +443,8 @@ async def _browse_file(config: dict, page: int, page_size: int) -> DataBrowseRes
 async def _browse_database(
     ds_type: str, config: dict, page: int, page_size: int, table: Optional[str]
 ) -> DataBrowseResponse:
-    if not table:
-        return DataBrowseResponse(columns=[], rows=[], total=0, page=page, page_size=page_size)
-
     try:
-        from sqlalchemy import create_engine, text
+        from sqlalchemy import create_engine, text, inspect
         dialect_map = {
             "mysql": "mysql+pymysql",
             "postgresql": "postgresql+psycopg2",
@@ -288,20 +465,29 @@ async def _browse_database(
                 f"{config.get('host', '')}{port_part}/{config.get('database', '')}"
             )
 
+        quote_char = "`" if ds_type == "mysql" else '"'
         engine = create_engine(url)
+
+        if not table:
+            inspector = inspect(engine)
+            tables = inspector.get_table_names()
+            table = tables[0] if tables else None
+            if not table:
+                engine.dispose()
+                return DataBrowseResponse(columns=[], rows=[], total=0, page=page, page_size=page_size)
+
         offset = (page - 1) * page_size
 
         with engine.connect() as conn:
-            count_result = conn.execute(text(f"SELECT COUNT(*) FROM \"{table}\""))
+            count_result = conn.execute(text(f"SELECT COUNT(*) FROM {quote_char}{table}{quote_char}"))
             total = count_result.scalar()
 
             result = conn.execute(
-                text(f'SELECT * FROM "{table}" LIMIT :limit OFFSET :offset'),
+                text(f"SELECT * FROM {quote_char}{table}{quote_char} LIMIT :limit OFFSET :offset"),
                 {"limit": page_size, "offset": offset},
             )
             columns = list(result.keys())
             rows = [dict(row._mapping) for row in result]
-
         engine.dispose()
 
         for row in rows:
