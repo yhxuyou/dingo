@@ -1,0 +1,16 @@
+#	问题类型	可检测规则	规则维度
+1	内容为空	RuleContentNull	有效性
+2	内容过短（1个字）	RuleContentShort / RuleCharNumber	有效性
+3	以冒号结尾	RuleColonEnd	有效性
+4	不可见字符（零宽字符\u200b\u200e\u200f）	RuleInvisibleChar / RuleAbnormalChar	有效性
+5	HTML实体（  < &quot; &hellip;）	RuleHtmlEntity / RuleAbnormalHtml	有效性
+6	HTML标签（<img> <p> </o:p>）	RuleHtmlTag / RuleAbnormalHtml	有效性
+7	连续换行过多（8个以上\n）	RuleEnterMore / RuleEnterAndSpace	有效性
+8	内容重复（同一段话重复5次）	RuleDocRepeat	相似度
+9	大写单词过多（全大写英文）	RuleCapitalWords	可理解性
+10	Lorem Ipsum占位符	RuleLoremIpsum	有效性
+11	正常数据 ✅	—	—
+12	仅含URL链接	RuleOnlyUrl	有效性
+13	PII个人信息泄露（身份证+手机号+邮箱）	RulePIIDetection / RuleIDCard	安全性
+14	花括号过多（JSON代码混入文本）	RuleCurlyBracket	可理解性
+15	正常数据 ✅	—

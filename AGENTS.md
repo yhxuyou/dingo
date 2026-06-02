@@ -7,6 +7,7 @@ Dingo is a comprehensive AI data quality evaluation tool for ML practitioners, d
 **Repository**: https://github.com/MigoXLab/dingo
 **PyPI**: `pip install dingo-python`
 **License**: Apache 2.0
+**Python**: >=3.10
 
 ## Tech Stack
 
@@ -18,261 +19,207 @@ Dingo is a comprehensive AI data quality evaluation tool for ML practitioners, d
 | MCP Server | FastMCP + SSE transport |
 | Distributed | PySpark (optional) |
 
+## Build / Lint / Test Commands
+
+```bash
+# Install in dev mode
+pip install -e .
+
+# Run all unit tests
+pytest test/scripts --ignore=test/scripts/data
+
+# Run a single test file
+pytest test/scripts/model/rule/test_rule_common.py -v
+
+# Run a single test class or method
+pytest test/scripts/model/rule/test_rule_common.py::TestRulePIIDetection -v
+pytest test/scripts/model/rule/test_rule_common.py::TestRulePIIDetection::test_no_pii_content -v
+
+# Run tests matching a keyword
+pytest test/scripts -k "test_faithfulness" -v
+
+# Skip slow/external tests
+pytest test/scripts -m "not slow and not external" --ignore=test/scripts/data
+
+# Lint: pre-commit hooks (isort + flake8 + trailing-whitespace + check-yaml)
+pre-commit run --all-files
+
+# Lint: check syntax and imports for all Python files
+python .github/scripts/check_imports.py
+
+# Integration tests via CLI
+dingo eval --input .github/env/local_plaintext.json
+dingo eval --input .github/env/local_plaintext_save.json
+dingo eval --input .github/env/local_json.json --json
+```
+
+## CLI Reference
+
+```bash
+dingo eval --input config.json      # Run evaluation
+dingo eval --input config.json --json  # JSON output for automation
+dingo info                           # List all evaluators, groups
+dingo info --rules --json            # Rule evaluators as JSON
+dingo serve                          # Start MCP server (SSE)
+dingo serve --transport stdio        # MCP server (stdio for local agent)
+python -m dingo.run.cli --input config.json  # Same as above
+```
+
 ## Directory Structure
 
 ```
 dingo/
-├── AGENTS.md                ← this file (agent instructions)
-├── setup.py                 ← package config (extras_require for optional deps)
-├── mcp_server.py            ← MCP server entry point (legacy, use `dingo serve` instead)
+├── setup.py                  ← version defined here (currently 2.2.2)
 ├── requirements/
-│   ├── runtime.txt          ← core dependencies (minimal)
-│   ├── datasource.txt       ← optional datasource deps (S3, SQL, Parquet, etc.)
-│   ├── optional.txt         ← heavy optional deps (torch, pyspark, etc.)
-│   └── agent.txt            ← agent evaluation deps (langchain, tavily)
-│
-├── SKILL.md                 ← AI agent skill definition (symlink → clawhub/SKILL.md)
-├── dingo/                   ← core Python package
-│   ├── config/
-│   │   └── input_args.py    ← InputArgs, EvalPiplineConfig, EvaluatorGroupConfig
-│   ├── io/
-│   │   ├── input/data.py    ← Data model (Pydantic, extra="allow")
-│   │   └── output/          ← ResultInfo, EvalDetail, SummaryModel (+ cross-layer analysis)
-│   ├── data/
-│   │   ├── datasource/      ← LocalDataSource, SQLDataSource, S3DataSource, HFDataSource
-│   │   ├── dataset/         ← Dataset implementations per source
-│   │   └── converter/       ← Format converters (JSON, JSONL, CSV, Parquet, etc.)
+│   ├── runtime.txt           ← core deps (openai, pydantic, numpy, etc.)
+│   ├── datasource.txt        ← optional datasource deps
+│   ├── optional.txt          ← heavy optional deps (torch, pyspark, etc.)
+│   └── agent.txt             ← agent eval deps (langchain, tavily)
+├── .pre-commit-config.yaml   ← isort (line_length=200, multi_line_output=0) + flake8
+├── setup.cfg                 ← flake8 (max-line-length=120), isort, pytest markers
+├── dingo/
+│   ├── config/input_args.py  ← Pydantic config models
+│   ├── io/input/data.py      ← Data model (extra="allow")
+│   ├── io/output/            ← EvalDetail, ResultInfo, SummaryModel
+│   ├── data/                 ← datasources, datasets, converters
 │   ├── model/
-│   │   ├── model.py         ← Model registry (rule_register, llm_register)
-│   │   ├── rule/            ← Rule-based evaluators (80+ built-in)
-│   │   │   ├── base.py      ← BaseRule
-│   │   │   ├── rule_common.py ← Common rules (text quality, format, PII, etc.)
-│   │   │   └── utils/       ← Shared utilities (normalize, ngrams, etc.)
-│   │   └── llm/             ← LLM-based evaluators
-│   │       ├── base_openai.py ← BaseOpenAI (base class for all LLM evaluators)
-│   │       ├── text_quality/  ← Text quality evaluators (V4, V5)
-│   │       ├── rag/          ← RAG metrics (Faithfulness, Precision, Recall, etc.)
-│   │       ├── hhh/          ← 3H evaluators (Honest, Helpful, Harmless)
-│   │       ├── compare/      ← Document comparison evaluators
-│   │       └── agent/        ← Agent-based evaluators
-│   │           ├── base_agent.py  ← BaseAgent
-│   │           ├── tools/         ← Tool registry + implementations
-│   │           ├── agent_fact_check.py
-│   │           └── agent_hallucination.py
-│   ├── exec/
-│   │   ├── local.py         ← LocalExecutor (single machine, cross-layer conflict detection)
-│   │   └── spark.py         ← SparkExecutor (distributed)
-│   └── run/
-│       └── cli.py           ← CLI entry point (subcommands: eval, info)
-│
-├── examples/                ← Usage examples (SDK, CLI, various scenarios)
-├── test/                    ← Test suite
-│   ├── data/                ← Test data files
-│   ├── env/                 ← Test environment configs
-│   └── scripts/             ← Test scripts (pytest)
-└── docs/                    ← Documentation
+│   │   ├── model.py          ← Model registry (rule_register, llm_register)
+│   │   ├── rule/             ← 80+ rule evaluators
+│   │   └── llm/              ← LLM/agent evaluators (text_quality, rag, hhh, etc.)
+│   ├── exec/                 ← LocalExecutor, SparkExecutor
+│   └── run/cli.py            ← CLI entry point
+├── test/scripts/             ← pytest tests mirroring dingo/ structure
+│   ├── model/rule/           ← rule evaluator tests
+│   ├── model/llm/            ← LLM evaluator tests
+│   └── exec/                 ← CLI and executor tests
+└── .github/env/              ← integration test configs
 ```
 
-## Core Concepts
+## Code Style Guidelines
 
-### Data Flow
+### General
 
+- **PEP 8** enforced by pre-commit (isort + flake8). isort config: `line_length=200, multi_line_output=0, known_first_party=dingo`. flake8: `max-line-length=120, ignore=E251`.
+- **Type hints** required on all function signatures. Use `from typing import List, Dict, Optional, etc.`
+- **Naming**: `PascalCase` classes, `snake_case` functions/methods/variables, `UPPER_CASE` constants, `_leading_underscore` for private/internal methods.
+- **Comments**: English or Chinese (both acceptable). Docstrings in English preferred.
+- **Module-level `__init__.py`**: re-export with `# noqa E402` if needed.
+
+### Imports
+
+- **Core deps** (numpy, pydantic, requests, openai, etc.): top-level imports OK.
+- **Optional/heavy deps** (torch, transformers, pyarrow, boto3, sqlalchemy, cv2, fasttext, langchain): **must** use lazy imports inside methods with clear `ImportError` messages.
+- Import ordering: standard library → third-party → first-party (`dingo.*`). isort handles this automatically.
+
+```python
+# Correct — lazy import with helpful error
+def load_data(self):
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        raise ImportError("pyarrow is required for Parquet support. Install: pip install dingo-python[parquet]")
+
+# Wrong — top-level import of optional dep
+import pyarrow.parquet as pq
 ```
-Data Input → Interface (SDK/CLI/MCP) → Datasource → Dataset → Converter → Evaluator → Executor → Report
+
+### Data Model
+
+`Data` uses `extra = "allow"` — access optional fields with `getattr(data, 'field', default)` instead of direct attribute access.
+
+```python
+raw_data = getattr(input_data, 'raw_data', {})
+context = getattr(input_data, 'context', None)
 ```
 
-### Registration System
+Common fields: `data_id`, `prompt`, `content`, `image`, `context`, `raw_data`, `reference`, `user_input`, `response`, `retrieved_contexts`.
 
-All evaluators use decorator-based registration:
+### Evaluator Contract
+
+Every evaluator class must:
+1. Use decorator registration: `@Model.rule_register(metric_type, groups)` or `@Model.llm_register('Name')`
+2. Return `EvalDetail(metric=cls.__name__, status=bool, label=List[str], reason=List[str])`
+3. Use `@classmethod eval(cls, input_data: Data) -> EvalDetail`
+4. Set `_required_fields = [RequiredField.CONTENT]` (list of RequiredField enum members)
+
+`EvalDetail.status` semantics: `True` = issue found (bad), `False` = no issue (good).
+
+### Error Handling
+
+- Evaluators must **never raise exceptions** for bad input data; return `EvalDetail` with error label instead.
+- Use `from dingo.utils import log` for logging (`log.info()`, `log.warning()`, `log.error()`).
+- External API calls: always handle timeouts, connection errors, and JSON parse errors with retry logic (see `BaseOpenAI.eval()` — 3 retry attempts).
+- Custom exceptions in `dingo/utils/exception.py`: `ExceedMaxTokens`, `ConvertJsonError`, `ConvertError`.
+- CLI exit codes: `0` success, `1` config error, `2` eval error, `3` IO error.
+
+### Configuration
+
+- Pydantic models for all config args in `dingo/config/input_args.py`.
+- Never hardcode API keys; always use config parameters (via `EvaluatorRuleArgs` / `EvaluatorLLMArgs`) or environment variables.
+- LLM config keys: `key`, `api_url`, `model`, `embedding_config`, `model_extra` (for temperature, max_tokens, etc.).
+
+### Dependency Management
+
+| Type | Location | Lazy import? |
+|------|----------|-------------|
+| Core (openai, numpy, pydantic, etc.) | `requirements/runtime.txt` | No |
+| Datasource (pyarrow, boto3, etc.) | `requirements/runtime.txt` (bundled) | Yes |
+| Heavy optional (torch, pyspark) | `setup.py` extras | Yes |
+| Agent (langchain, tavily) | `requirements/agent.txt` → `extras['agent']` | Yes |
+
+### Testing Conventions
+
+- Test files in `test/scripts/` mirroring `dingo/` structure.
+- Use pytest classes (`class TestSomething:`) with method-level test functions.
+- Use `unittest.mock.patch` for mocking LLM/API calls.
+- Test data in `test/data/`, test configs in `test/env/`.
+- Pytest markers: `slow`, `external`, `integration` (defined in `setup.cfg`).
+
+## Registration System
 
 ```python
 # Rule evaluator
 @Model.rule_register('QUALITY_BAD_COMPLETENESS', ['default', 'pretrain'])
 class MyRule(BaseRule):
+    _required_fields = [RequiredField.CONTENT]
+
     @classmethod
-    def eval(cls, input_data: Data) -> EvalDetail: ...
+    def eval(cls, input_data: Data) -> EvalDetail:
+        res = EvalDetail(metric=cls.__name__)
+        if problem_found:
+            res.status = True
+            res.label = [f"{cls.metric_type}.{cls.__name__}"]
+            res.reason = ["Description"]
+        else:
+            res.label = [QualityLabel.QUALITY_GOOD]
+        return res
 
 # LLM evaluator
 @Model.llm_register('MyLLMEvaluator')
 class MyLLMEvaluator(BaseOpenAI):
     prompt = "..."
+    _required_fields = [RequiredField.CONTENT]
+
     @classmethod
-    def build_messages(cls, input_data: Data) -> List: ...
+    def build_messages(cls, input_data: Data) -> List:
+        return [{'role': 'user', 'content': cls.prompt + input_data.content}]
 
 # Agent evaluator
 @Model.llm_register('MyAgent')
 class MyAgent(BaseAgent):
     available_tools = ["tavily_search"]
+
     @classmethod
     def eval(cls, input_data: Data) -> EvalDetail: ...
 ```
 
-### Data Model
-
-`Data` uses `extra = "allow"` — any field can be set dynamically:
-
-```python
-class Data(BaseModel):
-    class Config:
-        extra = "allow"
-```
-
-Common fields: `data_id`, `prompt`, `content`, `image`, `context`, `raw_data`, `reference`, `user_input`, `response`, `retrieved_contexts`.
-
-### InputArgs Configuration
-
-```python
-input_data = {
-    "input_path": "data.jsonl",
-    "dataset": {"source": "local", "format": "jsonl"},
-    "executor": {"max_workers": 4, "batch_size": 10, "result_save": {"bad": True, "good": True}},
-    "evaluator": [
-        {
-            "fields": {"content": "text_field", "prompt": "question_field"},
-            "evals": [
-                {"name": "RuleAbnormalChar"},
-                {"name": "LLMTextQualityV5", "config": {"key": "...", "model": "gpt-4o", "api_url": "..."}}
-            ]
-        }
-    ]
-}
-```
-
-### Execution Modes
-
-| Mode | Class | Use Case |
-|------|-------|----------|
-| Local | `Executor.exec_map["local"]` | Development, < 100K rows |
-| Spark | `Executor.exec_map["spark"]` | Production, > 1M rows |
-
-### Optional Dependencies (extras_require)
-
-```bash
-pip install dingo-python                # Core (includes all datasource support)
-pip install "dingo-python[hhem]"        # + HHEM hallucination detection (transformers + torch)
-pip install "dingo-python[agent]"       # + Agent-based evaluation (langchain)
-pip install "dingo-python[all]"         # + Everything
-```
-
-## Development Conventions
-
-### General
-
-- Python 3.10+ required
-- Code comments in English or Chinese (both acceptable)
-- All evaluators must return `EvalDetail` with `metric`, `status`, `label`, `reason`
-- Use lazy imports for optional heavy dependencies (torch, transformers, pyarrow, etc.)
-- Never hardcode API keys; use environment variables or config parameters
-
-### Adding a New Rule Evaluator
-
-1. Create class in `dingo/model/rule/rule_common.py` (or a new file under `dingo/model/rule/`)
-2. Inherit from `BaseRule`
-3. Decorate with `@Model.rule_register(metric_type, groups)`
-4. Implement `eval(cls, input_data: Data) -> EvalDetail` as classmethod
-5. Set `_required_fields` to declare needed input fields
-
-### Adding a New LLM Evaluator
-
-1. Create class in `dingo/model/llm/` (appropriate subdirectory)
-2. Inherit from `BaseOpenAI`
-3. Decorate with `@Model.llm_register('EvaluatorName')`
-4. Set `prompt` attribute or override `build_messages()`
-5. Override `parse_result()` if custom response parsing needed
-
-### Adding a New Datasource
-
-1. Create datasource class in `dingo/data/datasource/`
-2. Create dataset class in `dingo/data/dataset/`
-3. Register in the respective `__init__.py`
-4. Use lazy imports if new dependencies required
-5. Add dependency to `requirements/runtime.txt` (core) or `setup.py` extras (heavy/optional)
-
-### Testing
-
-```bash
-# Run all tests
-pytest test/scripts --ignore=test/scripts/data
-
-# Run specific test
-pytest test/scripts/model/llm/test_rag.py -v
-
-# Integration tests (CLI)
-dingo eval --input .github/env/local_plaintext.json
-dingo eval --input .github/env/local_json.json --json
-```
-
-### CLI Reference
-
-Dingo provides a `dingo` CLI command (installed via `pip install dingo-python`):
-
-```bash
-# Run evaluation (primary command)
-dingo eval --input config.json            # Human-readable output
-dingo eval --input config.json --json     # JSON output (for agents/automation)
-
-# List available evaluators, groups
-dingo info                                # Show all (rules, LLM, groups)
-dingo info --rules                        # Rule evaluators only
-dingo info --llm                          # LLM evaluators only
-dingo info --groups                       # Rule groups only
-dingo info --json                         # JSON output
-
-# Start MCP server (for AI agent integration)
-dingo serve                               # SSE transport on 0.0.0.0:8000
-dingo serve --port 9000                   # Custom port
-dingo serve --transport stdio             # stdio transport (for local agent)
-
-# Backward compatibility (no subcommand)
-dingo --input config.json                 # Same as `dingo eval --input config.json`
-python -m dingo.run.cli --input config.json
-```
-
-
-### Version Conventions
-
-- Version defined in `setup.py` (`version="2.0.0"`)
-- Follow semantic versioning (MAJOR.MINOR.PATCH)
-
-## MCP Server
-
-Start via CLI: `dingo serve` (SSE default) or `dingo serve --transport stdio`
-Legacy entry point: `mcp_server.py`
-Framework: FastMCP
-
-### Available MCP Tools
-
-| Tool | Purpose |
-|------|---------|
-| `run_dingo_evaluation` | Run rule or LLM evaluation on a file |
-| `list_dingo_components` | List rule groups, LLM models, prompts |
-| `get_rule_details` | Get details about a specific rule |
-| `get_llm_details` | Get details about a specific LLM evaluator |
-| `get_prompt_details` | Get embedded prompt for an LLM |
-| `run_quick_evaluation` | Goal-based evaluation (auto-infer settings) |
-
-### MCP Environment Variables
-
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | OpenAI API key for LLM evaluation |
-| `OPENAI_BASE_URL` | Custom API base URL |
-| `OPENAI_MODEL` | Model name (default: gpt-4) |
-| `DEFAULT_OUTPUT_DIR` | Default output directory |
-| `LOG_LEVEL` | Logging level (default: info) |
-
 ## Config Maintenance Rules
-
-When these events occur, update the corresponding files:
 
 | Event | Update |
 |-------|--------|
 | New evaluator added | Ensure registration decorator is correct; update `docs/metrics.md` |
-| New datasource added | Update `requirements/runtime.txt`, `setup.py` extras if heavy, README install section |
-| New dependency added | Decide: `runtime.txt` (core) vs `setup.py` extras (heavy/optional); use lazy import for optional |
-| New MCP tool added | Update MCP Tools table in this file |
-| New CLI subcommand added | Update CLI Reference section in this file |
-| Directory structure change | Update this file |
+| New datasource added | Update `requirements/runtime.txt`, `setup.py` extras if heavy |
+| New dependency added | Core → `runtime.txt`, optional → `setup.py` extras; use lazy import |
 | Version bump | Update `setup.py` version field |
 
 After completing a feature, check if any of the above need updating.

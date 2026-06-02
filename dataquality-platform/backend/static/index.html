@@ -658,12 +658,50 @@ function RulesPage() {
     const [form, setForm] = useState({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} });
     const [error, setError] = useState('');
     const [deleteConfirm, setDeleteConfirm] = useState(null);
+    const [createMode, setCreateMode] = useState('basic');
+    const [pythonTestResult, setPythonTestResult] = useState(null);
+    const [sqlTestResult, setSqlTestResult] = useState(null);
+    const [pythonTestContent, setPythonTestContent] = useState('');
+    const [sqlTestTable, setSqlTestTable] = useState('');
+    const [datasources, setDatasources] = useState([]);
+    const [sqlTemplates, setSqlTemplates] = useState([]);
+    const [testing, setTesting] = useState(false);
 
-    const RULE_TYPE_LABELS = { pattern: '正则模式匹配', keyword: '关键词检测', length: '长度校验', regex: '单正则匹配', builtin: '内置规则' };
+    const RULE_TYPE_LABELS = {
+        pattern: '正则模式匹配', keyword: '关键词检测', length: '长度校验', regex: '单正则匹配',
+        builtin: '内置规则', threshold: '阈值规则', python: 'Python 脚本', sql: 'SQL 查询'
+    };
+
+    const METRIC_OPTIONS = [
+        { value: 'char_ratio', label: '字符占比', desc: '特定字符占总字符的比例' },
+        { value: 'word_ratio', label: '词占比', desc: '特定词占总词数的比例' },
+        { value: 'line_ratio', label: '行占比', desc: '满足条件的行占总行数的比例' },
+        { value: 'count', label: '绝对计数', desc: '字符数/词数/句数等绝对值' },
+        { value: 'regex_count', label: '正则匹配计数', desc: '正则表达式匹配到的次数' },
+        { value: 'regex_ratio', label: '正则匹配占比', desc: '正则匹配数占总字符的比例' },
+        { value: 'repetition', label: '重复度', desc: '文本中重复内容的比例' },
+        { value: 'uniqueness', label: '唯一性', desc: '文本中唯一词占总词数的比例' },
+    ];
+
+    const OPERATOR_OPTIONS = [
+        { value: 'gt', label: '>' }, { value: 'lt', label: '<' },
+        { value: 'gte', label: '>=' }, { value: 'lte', label: '<=' },
+        { value: 'eq', label: '=' }, { value: 'between', label: '介于' },
+    ];
+
+    const PYTHON_TEMPLATES = [
+        { name: '空内容检测', code: `def evaluate(content: str) -> dict:\n    if not content or not content.strip():\n        return {'passed': False, 'reason': '内容为空'}\n    return {'passed': True, 'reason': ''}` },
+        { name: '正则匹配检测', code: `def evaluate(content: str) -> dict:\n    import re\n    pattern = r'your_pattern_here'\n    if re.search(pattern, content):\n        return {'passed': False, 'reason': '匹配到问题模式'}\n    return {'passed': True, 'reason': ''}` },
+        { name: '编码问题检测', code: `def evaluate(content: str) -> dict:\n    import re\n    issues = []\n    if re.search(r'[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f]', content):\n        issues.append('包含控制字符')\n    if re.search(r'\\ufffd', content):\n        issues.append('包含替换字符')\n    if issues:\n        return {'passed': False, 'reason': ', '.join(issues)}\n    return {'passed': True, 'reason': ''}` },
+        { name: '自定义格式校验', code: `def evaluate(content: str) -> dict:\n    import re\n    lines = content.strip().split('\\n')\n    bad_lines = []\n    for i, line in enumerate(lines):\n        if line and not re.match(r'^expected_format', line):\n            bad_lines.append(i + 1)\n    if bad_lines:\n        return {'passed': False, 'reason': f'第{bad_lines[:5]}行格式不符'}\n    return {'passed': True, 'reason': ''}` },
+        { name: '数值范围检测', code: `def evaluate(content: str) -> dict:\n    import re\n    numbers = re.findall(r'-?\\d+\\.?\\d*', content)\n    out_of_range = [n for n in numbers if float(n) < 0 or float(n) > 100]\n    if out_of_range:\n        return {'passed': False, 'reason': f'{len(out_of_range)}个数值超出范围'}\n    return {'passed': True, 'reason': ''}` },
+    ];
 
     useEffect(() => {
         fetchJSON('/api/rules/dimensions').then(setDimensions).catch(console.error);
         fetchJSON('/api/rules/rule-types').then(setRuleTypes).catch(console.error);
+        fetchJSON('/api/datasources').then(ds => setDatasources(ds.items || ds || [])).catch(console.error);
+        fetchJSON('/api/rules/sql-templates').then(setSqlTemplates).catch(console.error);
     }, []);
 
     const loadRules = useCallback(() => {
@@ -681,6 +719,29 @@ function RulesPage() {
         if (rt === 'keyword') return { keywords: form.config.keywords || [] };
         if (rt === 'length') return { min_length: form.config.min_length ?? 0, max_length: form.config.max_length ?? 999999 };
         if (rt === 'regex') return { pattern: form.config.pattern || '' };
+        if (rt === 'threshold') {
+            const cfg = {
+                metric: form.config.metric || 'char_ratio',
+                operator: form.config.operator || 'gt',
+                threshold: form.config.threshold ?? 0.5,
+                metric_params: form.config.metric_params || {},
+            };
+            if (form.config.operator === 'between' && form.config.threshold_max != null) {
+                cfg.threshold_max = form.config.threshold_max;
+            }
+            return cfg;
+        }
+        if (rt === 'python') return { code: form.config.code || '', timeout: form.config.timeout || 10 };
+        if (rt === 'sql') {
+            return {
+                sql: form.config.sql || '',
+                datasource_id: form.config.datasource_id || null,
+                value_column: form.config.value_column || 'cnt',
+                operator: form.config.operator || 'gt',
+                threshold: form.config.threshold ?? 0,
+                is_percentage: form.config.is_percentage || false,
+            };
+        }
         return form.config;
     };
 
@@ -697,6 +758,7 @@ function RulesPage() {
             }
             setModal(null);
             setForm({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} });
+            setCreateMode('basic');
             loadRules();
         } catch (e) {
             try {
@@ -709,9 +771,14 @@ function RulesPage() {
     };
 
     const handleEdit = (r) => {
+        const rt = r.rule_type || 'pattern';
+        let mode = 'basic';
+        if (['threshold'].includes(rt)) mode = 'advanced';
+        if (['python', 'sql'].includes(rt)) mode = 'expert';
+        setCreateMode(mode);
         setForm({
             id: r.id, name: r.name, metric_type: r.metric_type,
-            group: r.group, rule_type: r.rule_type || 'pattern',
+            group: r.group, rule_type: rt,
             description: r.description || '', config: r.config || {},
         });
         setModal('edit');
@@ -731,6 +798,61 @@ function RulesPage() {
         }
     };
 
+    const handleModeChange = (mode) => {
+        setCreateMode(mode);
+        if (mode === 'basic') {
+            setForm(f => ({ ...f, rule_type: 'pattern', config: {} }));
+        } else if (mode === 'advanced') {
+            setForm(f => ({ ...f, rule_type: 'threshold', config: { metric: 'char_ratio', operator: 'gt', threshold: 0.5, metric_params: {} } }));
+        } else if (mode === 'expert') {
+            setForm(f => ({ ...f, rule_type: 'python', config: { code: '', timeout: 10 } }));
+        }
+        setError('');
+    };
+
+    const handleTestPython = async () => {
+        setTesting(true);
+        setPythonTestResult(null);
+        try {
+            const res = await fetchJSON('/api/rules/test-python', {
+                method: 'POST',
+                body: JSON.stringify({ code: form.config.code || '', test_content: pythonTestContent || '测试文本', timeout: form.config.timeout || 10 }),
+            });
+            setPythonTestResult(res);
+        } catch (e) {
+            setPythonTestResult({ success: false, error: e.message });
+        }
+        setTesting(false);
+    };
+
+    const handleTestSql = async () => {
+        setTesting(true);
+        setSqlTestResult(null);
+        try {
+            const res = await fetchJSON('/api/rules/test-sql', {
+                method: 'POST',
+                body: JSON.stringify({ sql: form.config.sql || '', datasource_id: form.config.datasource_id, table_name: sqlTestTable }),
+            });
+            setSqlTestResult(res);
+        } catch (e) {
+            setSqlTestResult({ success: false, error: e.message });
+        }
+        setTesting(false);
+    };
+
+    const getThresholdPreview = () => {
+        const metric = METRIC_OPTIONS.find(m => m.value === (form.config.metric || 'char_ratio'));
+        const op = OPERATOR_OPTIONS.find(o => o.value === (form.config.operator || 'gt'));
+        const metricLabel = metric ? metric.label : form.config.metric;
+        const opLabel = op ? op.label : form.config.operator;
+        let text = `当${metricLabel} ${opLabel} ${form.config.threshold ?? 0.5}`;
+        if (form.config.operator === 'between' && form.config.threshold_max != null) {
+            text += ` 且 <= ${form.config.threshold_max}`;
+        }
+        text += ' 时标记为bad';
+        return text;
+    };
+
     const addPatternItem = () => setForm(f => ({ ...f, config: { ...f.config, patterns: [...(f.config.patterns || []), ''] } }));
     const removePatternItem = (i) => setForm(f => ({ ...f, config: { ...f.config, patterns: f.config.patterns.filter((_, idx) => idx !== i) } }));
     const updatePatternItem = (i, v) => setForm(f => ({ ...f, config: { ...f.config, patterns: f.config.patterns.map((p, idx) => idx === i ? v : p) } }));
@@ -739,11 +861,397 @@ function RulesPage() {
     const removeKeywordItem = (i) => setForm(f => ({ ...f, config: { ...f.config, keywords: f.config.keywords.filter((_, idx) => idx !== i) } }));
     const updateKeywordItem = (i, v) => setForm(f => ({ ...f, config: { ...f.config, keywords: f.config.keywords.map((k, idx) => idx === i ? v : k) } }));
 
+    const renderBasicConfig = () => {
+        if (form.rule_type === 'pattern') return (
+            <div>
+                <label className="block text-sm text-gray-400 mb-2">正则模式列表 <span className="text-coral">*</span></label>
+                <div className="space-y-2">
+                    {(form.config.patterns || []).map((p, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                            <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm font-mono"
+                                value={p} onChange={e => updatePatternItem(i, e.target.value)} placeholder="输入正则表达式" />
+                            <button onClick={() => removePatternItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
+                        </div>
+                    ))}
+                    <button onClick={addPatternItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加模式</button>
+                </div>
+            </div>
+        );
+        if (form.rule_type === 'keyword') return (
+            <div>
+                <label className="block text-sm text-gray-400 mb-2">关键词列表 <span className="text-coral">*</span></label>
+                <div className="space-y-2">
+                    {(form.config.keywords || []).map((kw, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                            <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm"
+                                value={kw} onChange={e => updateKeywordItem(i, e.target.value)} placeholder="输入关键词" />
+                            <button onClick={() => removeKeywordItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
+                        </div>
+                    ))}
+                    <button onClick={addKeywordItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加关键词</button>
+                </div>
+            </div>
+        );
+        if (form.rule_type === 'length') return (
+            <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="block text-sm text-gray-400 mb-1">最小长度</label>
+                    <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                        value={form.config.min_length ?? 0} onChange={e => setForm(f => ({ ...f, config: { ...f.config, min_length: parseInt(e.target.value) || 0 } }))}
+                        min={0} />
+                </div>
+                <div>
+                    <label className="block text-sm text-gray-400 mb-1">最大长度</label>
+                    <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                        value={form.config.max_length ?? 999999} onChange={e => setForm(f => ({ ...f, config: { ...f.config, max_length: parseInt(e.target.value) || 999999 } }))}
+                        min={0} />
+                </div>
+            </div>
+        );
+        if (form.rule_type === 'regex') return (
+            <div>
+                <label className="block text-sm text-gray-400 mb-1">正则表达式 <span className="text-coral">*</span></label>
+                <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
+                    value={form.config.pattern || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, pattern: e.target.value } }))}
+                    placeholder="输入正则表达式" />
+            </div>
+        );
+        return null;
+    };
+
+    const renderThresholdConfig = () => {
+        const metric = form.config.metric || 'char_ratio';
+        const mp = form.config.metric_params || {};
+        return (
+            <div className="space-y-4">
+                <div>
+                    <label className="block text-sm text-gray-400 mb-1">检测指标 <span className="text-coral">*</span></label>
+                    <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                        value={metric} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric: e.target.value, metric_params: {} } }))}>
+                        {METRIC_OPTIONS.map(m => <option key={m.value} value={m.value}>{m.label} - {m.desc}</option>)}
+                    </select>
+                </div>
+
+                {(metric === 'char_ratio') && (
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">目标字符</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm mb-2"
+                            value={mp.target || 'newline'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, target: e.target.value } } }))}>
+                            <option value="newline">换行符</option>
+                            <option value="uppercase">大写字母</option>
+                            <option value="lowercase">小写字母</option>
+                            <option value="digit">数字</option>
+                            <option value="space">空白字符</option>
+                            <option value="special">特殊字符</option>
+                            <option value="custom">自定义</option>
+                        </select>
+                        {mp.target === 'custom' && (
+                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                value={mp.custom_chars || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, custom_chars: e.target.value } } }))}
+                                placeholder="输入要统计的字符" />
+                        )}
+                    </div>
+                )}
+
+                {(metric === 'word_ratio') && (
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">关键词列表 <span className="text-coral">*</span></label>
+                        <div className="space-y-2">
+                            {(mp.key_list || []).map((kw, i) => (
+                                <div key={i} className="flex items-center gap-2">
+                                    <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm"
+                                        value={kw} onChange={e => {
+                                            const newList = [...(mp.key_list || [])];
+                                            newList[i] = e.target.value;
+                                            setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, key_list: newList } } }));
+                                        }} placeholder="输入关键词" />
+                                    <button onClick={() => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, key_list: (mp.key_list || []).filter((_, idx) => idx !== i) } } }))}
+                                        className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
+                                </div>
+                            ))}
+                            <button onClick={() => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, key_list: [...(mp.key_list || []), ''] } } }))}
+                                className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加关键词</button>
+                        </div>
+                    </div>
+                )}
+
+                {(metric === 'line_ratio') && (
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">行类型</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                            value={mp.target || 'ends_with_punct'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, target: e.target.value } } }))}>
+                            <option value="ends_with_punct">以标点结尾的行</option>
+                            <option value="starts_with_bullet">以列表符号开头的行</option>
+                            <option value="empty">空行</option>
+                        </select>
+                    </div>
+                )}
+
+                {metric === 'count' && (
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">计数目标</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                            value={mp.target || 'char'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, target: e.target.value } } }))}>
+                            <option value="char">字符数</option>
+                            <option value="word">词数</option>
+                            <option value="sentence">句数</option>
+                            <option value="line">行数</option>
+                            <option value="byte">字节数</option>
+                        </select>
+                    </div>
+                )}
+
+                {(metric === 'regex_count' || metric === 'regex_ratio') && (
+                    <div>
+                        <label className="block text-sm text-gray-400 mb-1">正则表达式 <span className="text-coral">*</span></label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
+                            value={mp.pattern || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, metric_params: { ...mp, pattern: e.target.value } } }))}
+                            placeholder="输入正则表达式" />
+                    </div>
+                )}
+
+                <div className="glass-card rounded-lg p-3 space-y-3">
+                    <div className="text-sm text-brand-300 font-medium">判断条件</div>
+                    <div className="grid grid-cols-3 gap-3">
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">运算符</label>
+                            <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                value={form.config.operator || 'gt'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, operator: e.target.value } }))}>
+                                {OPERATOR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block text-xs text-gray-500 mb-1">阈值</label>
+                            <input type="number" step="any" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                value={form.config.threshold ?? 0.5} onChange={e => setForm(f => ({ ...f, config: { ...f.config, threshold: parseFloat(e.target.value) || 0 } }))} />
+                        </div>
+                        {form.config.operator === 'between' && (
+                            <div>
+                                <label className="block text-xs text-gray-500 mb-1">上限</label>
+                                <input type="number" step="any" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                                    value={form.config.threshold_max ?? 1} onChange={e => setForm(f => ({ ...f, config: { ...f.config, threshold_max: parseFloat(e.target.value) || 1 } }))} />
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="text-xs text-mint bg-surface-0 rounded-lg px-3 py-2">
+                    📋 {getThresholdPreview()}
+                </div>
+            </div>
+        );
+    };
+
+    const renderPythonConfig = () => (
+        <div className="space-y-4">
+            <div className="glass-card rounded-lg p-3">
+                <div className="text-sm text-brand-300 font-medium mb-2">函数签名</div>
+                <div className="text-xs font-mono text-gray-400 bg-surface-0 rounded px-3 py-2">
+                    {"def evaluate(content: str) -> dict:"}<br />
+                    {"    # 返回 {'passed': bool, 'reason': str}"}
+                </div>
+            </div>
+
+            <div>
+                <label className="block text-sm text-gray-400 mb-1">代码模板</label>
+                <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm mb-2"
+                    onChange={e => {
+                        const tpl = PYTHON_TEMPLATES.find(t => t.name === e.target.value);
+                        if (tpl) setForm(f => ({ ...f, config: { ...f.config, code: tpl.code } }));
+                        e.target.value = '';
+                    }}>
+                    <option value="">选择模板...</option>
+                    {PYTHON_TEMPLATES.map(t => <option key={t.name} value={t.name}>{t.name}</option>)}
+                </select>
+            </div>
+
+            <div>
+                <label className="block text-sm text-gray-400 mb-1">Python 代码 <span className="text-coral">*</span></label>
+                <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
+                    rows={12} style={{ tabSize: 4, minHeight: '200px' }}
+                    value={form.config.code || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, code: e.target.value } }))}
+                    placeholder="def evaluate(content: str) -> dict:&#10;    # 编写检测逻辑&#10;    return {'passed': True, 'reason': ''}" />
+            </div>
+
+            <div className="flex items-center gap-4">
+                <div className="flex-1">
+                    <label className="block text-sm text-gray-400 mb-1">超时(秒)</label>
+                    <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                        value={form.config.timeout || 10} onChange={e => setForm(f => ({ ...f, config: { ...f.config, timeout: parseInt(e.target.value) || 10 } }))}
+                        min={1} max={60} />
+                </div>
+                <div className="flex-1">
+                    <label className="block text-sm text-gray-400 mb-1">可用模块</label>
+                    <div className="text-xs text-gray-500 bg-surface-0 rounded-lg px-3 py-2 font-mono">
+                        re, json, string, collections, math, datetime, urllib.parse
+                    </div>
+                </div>
+            </div>
+
+            <div className="glass-card rounded-lg p-3 space-y-3">
+                <div className="text-sm text-amber font-medium">🧪 测试</div>
+                <div>
+                    <label className="block text-xs text-gray-500 mb-1">测试文本</label>
+                    <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-xs"
+                        rows={3} value={pythonTestContent} onChange={e => setPythonTestContent(e.target.value)}
+                        placeholder="输入测试文本内容..." />
+                </div>
+                <button onClick={handleTestPython} disabled={testing || !form.config.code}
+                    className="btn-primary text-white px-4 py-1.5 rounded-lg text-xs disabled:opacity-50">
+                    {testing ? '执行中...' : '运行测试'}
+                </button>
+                {pythonTestResult && (
+                    <div className={`rounded-lg px-3 py-2 text-xs ${pythonTestResult.success ? 'bg-mint/10 text-mint border border-mint/30' : 'bg-coral/10 text-coral border border-coral/30'}`}>
+                        {pythonTestResult.success ? (
+                            <div>
+                                <div className="font-medium mb-1">执行成功</div>
+                                <div>passed: {String(pythonTestResult.result?.passed)}</div>
+                                <div>reason: {pythonTestResult.result?.reason || '(无)'}</div>
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="font-medium mb-1">执行失败</div>
+                                <div>{pythonTestResult.error}</div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const renderSqlConfig = () => (
+        <div className="space-y-4">
+            <div>
+                <label className="block text-sm text-gray-400 mb-1">数据源 (可选)</label>
+                <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                    value={form.config.datasource_id || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, datasource_id: e.target.value ? parseInt(e.target.value) : null } }))}>
+                    <option value="">使用任务数据源</option>
+                    {datasources.map(ds => <option key={ds.id} value={ds.id}>{ds.name} ({ds.type})</option>)}
+                </select>
+            </div>
+
+            <div>
+                <label className="block text-sm text-gray-400 mb-2">快捷模板</label>
+                <div className="flex flex-wrap gap-2">
+                    {sqlTemplates.map(t => (
+                        <button key={t.name} onClick={() => setForm(f => ({ ...f, config: { ...f.config, sql: t.sql, operator: t.operator, threshold: t.threshold, value_column: 'cnt' } }))}
+                            className="btn-ghost text-brand-300 px-3 py-1 rounded text-xs border border-brand-500/30 hover:bg-brand-600/20">
+                            {t.name}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div>
+                <label className="block text-sm text-gray-400 mb-1">SQL 查询 <span className="text-coral">*</span></label>
+                <textarea className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
+                    rows={6} value={form.config.sql || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, sql: e.target.value } }))}
+                    placeholder="SELECT COUNT(*) as cnt FROM {table} WHERE {column} IS NULL" />
+                <div className="text-xs text-gray-600 mt-1 font-mono">
+                    可用变量: {'{table}'} {'{column}'} {'{database}'}
+                </div>
+            </div>
+
+            <div className="glass-card rounded-lg p-3 space-y-3">
+                <div className="text-sm text-brand-300 font-medium">判断条件</div>
+                <div className="grid grid-cols-3 gap-3">
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">结果列名</label>
+                        <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                            value={form.config.value_column || 'cnt'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, value_column: e.target.value } }))}
+                            placeholder="cnt" />
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">运算符</label>
+                        <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                            value={form.config.operator || 'gt'} onChange={e => setForm(f => ({ ...f, config: { ...f.config, operator: e.target.value } }))}>
+                            {OPERATOR_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </select>
+                    </div>
+                    <div>
+                        <label className="block text-xs text-gray-500 mb-1">阈值</label>
+                        <input type="number" step="any" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                            value={form.config.threshold ?? 0} onChange={e => setForm(f => ({ ...f, config: { ...f.config, threshold: parseFloat(e.target.value) || 0 } }))} />
+                    </div>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-gray-400 cursor-pointer">
+                    <input type="checkbox" checked={form.config.is_percentage || false}
+                        onChange={e => setForm(f => ({ ...f, config: { ...f.config, is_percentage: e.target.checked } }))}
+                        className="rounded" />
+                    结果为百分比 (查询值 / 总行数)
+                </label>
+            </div>
+
+            <div className="glass-card rounded-lg p-3 space-y-3">
+                <div className="text-sm text-amber font-medium">🧪 测试 SQL</div>
+                <div>
+                    <label className="block text-xs text-gray-500 mb-1">表名 (用于替换 {'{table}'})</label>
+                    <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
+                        value={sqlTestTable} onChange={e => setSqlTestTable(e.target.value)}
+                        placeholder="输入表名" />
+                </div>
+                <button onClick={handleTestSql} disabled={testing || !form.config.sql || !form.config.datasource_id}
+                    className="btn-primary text-white px-4 py-1.5 rounded-lg text-xs disabled:opacity-50">
+                    {testing ? '执行中...' : '测试 SQL'}
+                </button>
+                {sqlTestResult && (
+                    <div className={`rounded-lg px-3 py-2 text-xs ${sqlTestResult.success ? 'bg-mint/10 text-mint border border-mint/30' : 'bg-coral/10 text-coral border border-coral/30'}`}>
+                        {sqlTestResult.success ? (
+                            <div>
+                                <div className="font-medium mb-1">查询成功</div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs">
+                                        <thead><tr>{(sqlTestResult.columns || []).map(c => <th key={c} className="text-left px-2 py-1 border-b border-mint/20">{c}</th>)}</tr></thead>
+                                        <tbody>{(sqlTestResult.rows || []).map((row, i) => <tr key={i}>{Object.values(row).map((v, j) => <td key={j} className="px-2 py-1">{String(v)}</td>)}</tr>)}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ) : (
+                            <div>
+                                <div className="font-medium mb-1">执行失败</div>
+                                <div>{sqlTestResult.error}</div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+
+    const getRuleSummary = (r) => {
+        if (r.is_builtin) return null;
+        const rt = r.rule_type;
+        if (rt === 'pattern' && r.config?.patterns) return `模式: ${r.config.patterns.join(' | ')}`;
+        if (rt === 'keyword' && r.config?.keywords) return `关键词: ${r.config.keywords.join(', ')}`;
+        if (rt === 'length' && r.config) return `长度范围: ${r.config.min_length ?? 0} ~ ${r.config.max_length ?? '∞'}`;
+        if (rt === 'regex' && r.config?.pattern) return `正则: ${r.config.pattern}`;
+        if (rt === 'threshold') {
+            const metric = METRIC_OPTIONS.find(m => m.value === r.config?.metric);
+            const op = OPERATOR_OPTIONS.find(o => o.value === r.config?.operator);
+            return `${metric?.label || r.config?.metric} ${op?.label || r.config?.operator} ${r.config?.threshold ?? 0}`;
+        }
+        if (rt === 'python') {
+            const lines = (r.config?.code || '').split('\n').filter(l => l.trim());
+            return `🐍 ${lines.slice(0, 2).join(' | ')}`;
+        }
+        if (rt === 'sql') {
+            return `🗄 ${(r.config?.sql || '').substring(0, 80)}...`;
+        }
+        return null;
+    };
+
+    const getRuleTypeBadge = (rt) => {
+        if (['threshold'].includes(rt)) return <span className="badge bg-sky/15 text-sky">高级</span>;
+        if (['python', 'sql'].includes(rt)) return <span className="badge bg-purple-500/15 text-purple-400">专家</span>;
+        return null;
+    };
+
     return (
         <div className="fade-in">
             <div className="flex items-center justify-between mb-6">
                 <h1 className="font-display text-2xl font-bold text-white">规则管理</h1>
-                <button onClick={() => { setModal('add'); setForm({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} }); setError(''); }}
+                <button onClick={() => { setModal('add'); setForm({ name: '', metric_type: '', group: 'custom', rule_type: 'pattern', description: '', config: {} }); setCreateMode('basic'); setError(''); setPythonTestResult(null); setSqlTestResult(null); }}
                     className="btn-primary text-white px-4 py-2 rounded-lg text-sm font-medium">+ 自定义规则</button>
             </div>
 
@@ -772,6 +1280,7 @@ function RulesPage() {
             <div className="grid gap-2">
                 {rules.map((r, i) => {
                     const c = getDimColor(r.metric_type);
+                    const summary = getRuleSummary(r);
                     return (
                         <div key={`${r.id}-${i}`} className="glass-card rounded-xl p-4 slide-in" style={{ animationDelay: `${i * 30}ms` }}>
                             <div className="flex items-center justify-between">
@@ -793,20 +1302,10 @@ function RulesPage() {
                                                     {RULE_TYPE_LABELS[r.rule_type] || r.rule_type}
                                                 </span>
                                             )}
+                                            {!r.is_builtin && getRuleTypeBadge(r.rule_type)}
                                         </div>
                                         {r.description && <div className="text-xs text-gray-500 mt-1 max-w-lg truncate">{r.description}</div>}
-                                        {!r.is_builtin && r.rule_type === 'pattern' && r.config?.patterns && (
-                                            <div className="text-xs text-gray-600 mt-1 truncate">模式: {r.config.patterns.join(' | ')}</div>
-                                        )}
-                                        {!r.is_builtin && r.rule_type === 'keyword' && r.config?.keywords && (
-                                            <div className="text-xs text-gray-600 mt-1 truncate">关键词: {r.config.keywords.join(', ')}</div>
-                                        )}
-                                        {!r.is_builtin && r.rule_type === 'length' && r.config && (
-                                            <div className="text-xs text-gray-600 mt-1">长度范围: {r.config.min_length ?? 0} ~ {r.config.max_length ?? '∞'}</div>
-                                        )}
-                                        {!r.is_builtin && r.rule_type === 'regex' && r.config?.pattern && (
-                                            <div className="text-xs text-gray-600 mt-1 truncate font-mono">正则: {r.config.pattern}</div>
-                                        )}
+                                        {summary && <div className="text-xs text-gray-600 mt-1 truncate max-w-lg">{summary}</div>}
                                     </div>
                                 </div>
                                 {!r.is_builtin && (
@@ -835,11 +1334,26 @@ function RulesPage() {
                 </Modal>
             )}
 
-            <Modal open={!!modal} onClose={() => { setModal(null); setError(''); }} title={modal === 'add' ? '创建自定义规则' : '编辑自定义规则'}>
+            <Modal open={!!modal} onClose={() => { setModal(null); setError(''); }} title={modal === 'add' ? '创建自定义规则' : '编辑自定义规则'} wide>
                 <div className="space-y-4">
                     {error && (
                         <div className="bg-coral/10 border border-coral/30 rounded-lg px-3 py-2 text-sm text-coral">{error}</div>
                     )}
+
+                    <div className="flex gap-1 bg-surface-0 rounded-lg p-1">
+                        {[
+                            { key: 'basic', label: '🟢 基础模式', desc: '正则/关键词/长度' },
+                            { key: 'advanced', label: '🔵 高级模式', desc: '指标+阈值编排' },
+                            { key: 'expert', label: '🟣 专家模式', desc: 'Python/SQL' },
+                        ].map(m => (
+                            <button key={m.key} onClick={() => handleModeChange(m.key)}
+                                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium transition-all ${createMode === m.key ? 'bg-brand-600/30 text-brand-200 border border-brand-500/40' : 'text-gray-500 hover:text-gray-300'}`}>
+                                <div>{m.label}</div>
+                                <div className="opacity-60 text-[10px]">{m.desc}</div>
+                            </button>
+                        ))}
+                    </div>
+
                     <div>
                         <label className="block text-sm text-gray-400 mb-1">规则名称 <span className="text-coral">*</span></label>
                         <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.name}
@@ -858,7 +1372,11 @@ function RulesPage() {
                             <label className="block text-sm text-gray-400 mb-1">规则类型 <span className="text-coral">*</span></label>
                             <select className="input-field w-full rounded-lg px-3 py-2 text-white text-sm" value={form.rule_type}
                                 onChange={e => setForm(f => ({ ...f, rule_type: e.target.value, config: {} }))}>
-                                {ruleTypes.map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
+                                {ruleTypes.filter(rt => {
+                                    if (createMode === 'basic') return rt.group === 'basic';
+                                    if (createMode === 'advanced') return rt.group === 'advanced';
+                                    return rt.group === 'expert';
+                                }).map(rt => <option key={rt.value} value={rt.value}>{rt.label}</option>)}
                             </select>
                         </div>
                     </div>
@@ -868,65 +1386,12 @@ function RulesPage() {
                             value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="描述此规则的检测目的..." />
                     </div>
 
-                    {form.rule_type === 'pattern' && (
-                        <div>
-                            <label className="block text-sm text-gray-400 mb-2">正则模式列表 <span className="text-coral">*</span></label>
-                            <div className="space-y-2">
-                                {(form.config.patterns || []).map((p, i) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                        <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm font-mono"
-                                            value={p} onChange={e => updatePatternItem(i, e.target.value)} placeholder="输入正则表达式，如: \\d{4}-\\d{2}-\\d{2}" />
-                                        <button onClick={() => removePatternItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
-                                    </div>
-                                ))}
-                                <button onClick={addPatternItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加模式</button>
-                            </div>
-                        </div>
-                    )}
+                    {createMode === 'basic' && renderBasicConfig()}
+                    {createMode === 'advanced' && renderThresholdConfig()}
+                    {createMode === 'expert' && form.rule_type === 'python' && renderPythonConfig()}
+                    {createMode === 'expert' && form.rule_type === 'sql' && renderSqlConfig()}
 
-                    {form.rule_type === 'keyword' && (
-                        <div>
-                            <label className="block text-sm text-gray-400 mb-2">关键词列表 <span className="text-coral">*</span></label>
-                            <div className="space-y-2">
-                                {(form.config.keywords || []).map((kw, i) => (
-                                    <div key={i} className="flex items-center gap-2">
-                                        <input className="input-field flex-1 rounded-lg px-3 py-2 text-white text-sm"
-                                            value={kw} onChange={e => updateKeywordItem(i, e.target.value)} placeholder="输入关键词" />
-                                        <button onClick={() => removeKeywordItem(i)} className="text-coral hover:text-red-400 text-lg leading-none">&times;</button>
-                                    </div>
-                                ))}
-                                <button onClick={addKeywordItem} className="btn-ghost text-brand-300 px-3 py-1.5 rounded-lg text-xs w-full">+ 添加关键词</button>
-                            </div>
-                        </div>
-                    )}
-
-                    {form.rule_type === 'length' && (
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">最小长度</label>
-                                <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
-                                    value={form.config.min_length ?? 0} onChange={e => setForm(f => ({ ...f, config: { ...f.config, min_length: parseInt(e.target.value) || 0 } }))}
-                                    min={0} />
-                            </div>
-                            <div>
-                                <label className="block text-sm text-gray-400 mb-1">最大长度</label>
-                                <input type="number" className="input-field w-full rounded-lg px-3 py-2 text-white text-sm"
-                                    value={form.config.max_length ?? 999999} onChange={e => setForm(f => ({ ...f, config: { ...f.config, max_length: parseInt(e.target.value) || 999999 } }))}
-                                    min={0} />
-                            </div>
-                        </div>
-                    )}
-
-                    {form.rule_type === 'regex' && (
-                        <div>
-                            <label className="block text-sm text-gray-400 mb-1">正则表达式 <span className="text-coral">*</span></label>
-                            <input className="input-field w-full rounded-lg px-3 py-2 text-white text-sm font-mono"
-                                value={form.config.pattern || ''} onChange={e => setForm(f => ({ ...f, config: { ...f.config, pattern: e.target.value } }))}
-                                placeholder="输入正则表达式，如: \\d{4}-\\d{2}-\\d{2}" />
-                        </div>
-                    )}
-
-                    {form.rule_type && ruleTypes.find(rt => rt.value === form.rule_type) && (
+                    {form.rule_type && ruleTypes.find(rt => rt.value === form.rule_type) && createMode !== 'expert' && (
                         <div className="text-xs text-gray-600 bg-surface-0 rounded-lg px-3 py-2">
                             💡 {ruleTypes.find(rt => rt.value === form.rule_type).description}
                         </div>

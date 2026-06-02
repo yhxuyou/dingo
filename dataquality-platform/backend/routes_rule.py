@@ -12,7 +12,7 @@ from backend.engine import get_builtin_rules, get_builtin_rules_grouped, get_rul
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
-VALID_RULE_TYPES = {"pattern", "keyword", "length", "regex"}
+VALID_RULE_TYPES = {"pattern", "keyword", "length", "regex", "threshold", "python", "sql"}
 VALID_METRIC_TYPES = {
     "QUALITY_BAD_EFFECTIVENESS",
     "QUALITY_BAD_FLUENCY",
@@ -73,6 +73,50 @@ def _validate_rule_config(rule_type: str, config: dict):
             re.compile(pattern)
         except re.error as e:
             raise HTTPException(status_code=422, detail=f"正则表达式无效: {e}")
+    elif rule_type == "threshold":
+        valid_metrics = {"char_ratio", "word_ratio", "line_ratio", "count", "regex_count", "regex_ratio", "repetition", "uniqueness"}
+        metric = config.get("metric", "")
+        if not metric or metric not in valid_metrics:
+            raise HTTPException(status_code=422, detail=f"无效的检测指标，可选值: {', '.join(sorted(valid_metrics))}")
+        operator = config.get("operator", "gt")
+        valid_operators = {"gt", "lt", "gte", "lte", "eq", "between"}
+        if operator not in valid_operators:
+            raise HTTPException(status_code=422, detail=f"无效的比较运算符，可选值: {', '.join(sorted(valid_operators))}")
+        if "threshold" not in config:
+            raise HTTPException(status_code=422, detail="threshold 类型规则必须提供 threshold 阈值")
+        if metric in ("regex_count", "regex_ratio"):
+            metric_params = config.get("metric_params", {})
+            if not metric_params.get("pattern"):
+                raise HTTPException(status_code=422, detail="正则匹配类指标必须在 metric_params 中提供 pattern")
+        if metric == "word_ratio":
+            metric_params = config.get("metric_params", {})
+            if not metric_params.get("key_list"):
+                raise HTTPException(status_code=422, detail="词占比指标必须在 metric_params 中提供 key_list")
+    elif rule_type == "python":
+        code = config.get("code", "")
+        if not code or not code.strip():
+            raise HTTPException(status_code=422, detail="python 类型规则必须提供 code 代码")
+        try:
+            import ast
+            ast.parse(code)
+        except SyntaxError as e:
+            raise HTTPException(status_code=422, detail=f"Python 代码语法错误: {e}")
+        from backend.python_sandbox import validate_python_code
+        is_safe, msg = validate_python_code(code)
+        if not is_safe:
+            raise HTTPException(status_code=422, detail=f"Python 代码安全检查未通过: {msg}")
+    elif rule_type == "sql":
+        sql = config.get("sql", "")
+        if not sql or not sql.strip():
+            raise HTTPException(status_code=422, detail="sql 类型规则必须提供 sql 查询语句")
+        from backend.sql_safety import validate_sql_safety
+        is_safe, msg = validate_sql_safety(sql)
+        if not is_safe:
+            raise HTTPException(status_code=422, detail=f"SQL 安全检查未通过: {msg}")
+        operator = config.get("operator", "gt")
+        valid_operators = {"gt", "lt", "gte", "lte", "eq", "between"}
+        if operator not in valid_operators:
+            raise HTTPException(status_code=422, detail=f"无效的比较运算符，可选值: {', '.join(sorted(valid_operators))}")
 
 
 @router.get("/builtin")
@@ -102,10 +146,99 @@ async def list_dimensions():
 @router.get("/rule-types")
 async def list_rule_types():
     return [
-        {"value": "pattern", "label": "正则模式匹配", "description": "使用正则表达式列表匹配数据中的问题模式"},
-        {"value": "keyword", "label": "关键词检测", "description": "检测数据中是否包含指定关键词"},
-        {"value": "length", "label": "长度校验", "description": "校验文本长度是否在指定范围内"},
-        {"value": "regex", "label": "单正则匹配", "description": "使用单个正则表达式检测数据问题"},
+        {"value": "pattern", "label": "正则模式匹配", "group": "basic", "description": "使用正则表达式列表匹配数据中的问题模式"},
+        {"value": "keyword", "label": "关键词检测", "group": "basic", "description": "检测数据中是否包含指定关键词"},
+        {"value": "length", "label": "长度校验", "group": "basic", "description": "校验文本长度是否在指定范围内"},
+        {"value": "regex", "label": "单正则匹配", "group": "basic", "description": "使用单个正则表达式检测数据问题"},
+        {"value": "threshold", "label": "阈值规则", "group": "advanced", "description": "组合检测指标与阈值判断，支持字符占比、词占比、正则匹配计数等"},
+        {"value": "python", "label": "Python 脚本", "group": "expert", "description": "自定义 Python 检测逻辑，编写 evaluate 函数实现灵活检测"},
+        {"value": "sql", "label": "SQL 查询", "group": "expert", "description": "数据库 SQL 质量评估，执行 SELECT 查询搭配阈值判断"},
+    ]
+
+
+@router.post("/test-python")
+async def test_python_code(body: dict):
+    code = body.get("code", "")
+    test_content = body.get("test_content", "测试文本")
+    timeout = body.get("timeout", 10)
+    if not code.strip():
+        raise HTTPException(status_code=422, detail="代码不能为空")
+    try:
+        import ast
+        ast.parse(code)
+    except SyntaxError as e:
+        return {"success": False, "error": f"语法错误: {e}"}
+    from backend.python_sandbox import validate_python_code, execute_in_sandbox
+    is_safe, msg = validate_python_code(code)
+    if not is_safe:
+        return {"success": False, "error": f"安全检查未通过: {msg}"}
+    try:
+        result = execute_in_sandbox(code, test_content, timeout)
+        return {"success": True, "result": result}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@router.post("/test-sql")
+async def test_sql_query(body: dict):
+    sql = body.get("sql", "")
+    datasource_id = body.get("datasource_id")
+    table_name = body.get("table_name", "")
+    if not sql.strip():
+        raise HTTPException(status_code=422, detail="SQL 不能为空")
+    from backend.sql_safety import validate_sql_safety
+    is_safe, msg = validate_sql_safety(sql)
+    if not is_safe:
+        return {"success": False, "error": f"安全检查未通过: {msg}"}
+    if not datasource_id:
+        return {"success": False, "error": "请选择数据源"}
+    from backend.database import get_session
+    async for session in get_session():
+        from backend.models import Datasource
+        ds = await session.get(Datasource, datasource_id)
+        if not ds:
+            return {"success": False, "error": "数据源不存在"}
+        ds_type = ds.type.value if hasattr(ds.type, 'value') else ds.type
+        config = ds.config
+        if ds_type == "local_file":
+            return {"success": False, "error": "本地文件数据源不支持 SQL 查询"}
+        try:
+            from sqlalchemy import create_engine, text
+            dialect_map = {"mysql": "mysql+pymysql", "postgresql": "postgresql+psycopg2", "oracle": "oracle+cx_oracle", "sqlserver": "mssql+pyodbc", "sqlite": "sqlite"}
+            dialect = dialect_map.get(ds_type, ds_type)
+            password_part = f":{config.get('password', '')}" if config.get("password") else ""
+            port_part = f":{config.get('port', '')}" if config.get("port") else ""
+            if ds_type == "sqlite":
+                url = f"sqlite:///{config.get('database', '')}"
+            else:
+                url = f"{dialect}://{config.get('username', '')}{password_part}@{config.get('host', '')}{port_part}/{config.get('database', '')}"
+            if table_name:
+                quote = "`" if ds_type == "mysql" else '"'
+                sql = sql.replace("{table}", f"{quote}{table_name}{quote}")
+            engine = create_engine(url)
+            with engine.connect() as conn:
+                result = conn.execute(text(sql))
+                columns = list(result.keys())
+                rows = [dict(row._mapping) for row in result.fetchmany(10)]
+            engine.dispose()
+            for row in rows:
+                for k, v in row.items():
+                    if not isinstance(v, (str, int, float, bool, type(None))):
+                        row[k] = str(v)
+            return {"success": True, "columns": columns, "rows": rows}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+
+@router.get("/sql-templates")
+async def list_sql_templates():
+    return [
+        {"name": "空值检测", "sql": "SELECT COUNT(*) as cnt FROM {table} WHERE {column} IS NULL OR {column} = ''", "description": "检测空值或空字符串的数量", "operator": "gt", "threshold": 0},
+        {"name": "重复检测", "sql": "SELECT COUNT(*) - COUNT(DISTINCT {column}) as cnt FROM {table}", "description": "检测重复值的数量", "operator": "gt", "threshold": 0},
+        {"name": "格式检测", "sql": "SELECT COUNT(*) as cnt FROM {table} WHERE {column} != '' AND {column} NOT REGEXP '{pattern}'", "description": "检测不符合指定格式的记录数", "operator": "gt", "threshold": 0},
+        {"name": "范围检测", "sql": "SELECT COUNT(*) as cnt FROM {table} WHERE {column} < {min} OR {column} > {max}", "description": "检测超出指定范围的记录数", "operator": "gt", "threshold": 0},
+        {"name": "唯一性检测", "sql": "SELECT COUNT(*) - COUNT(DISTINCT {column}) as cnt FROM {table}", "description": "检测非唯一值的数量", "operator": "gt", "threshold": 0},
+        {"name": "参照完整性", "sql": "SELECT COUNT(*) as cnt FROM {table} t1 LEFT JOIN {ref_table} t2 ON t1.{column} = t2.{ref_column} WHERE t2.{ref_column} IS NULL", "description": "检测外键引用不存在的记录数", "operator": "gt", "threshold": 0},
     ]
 
 
@@ -381,4 +514,15 @@ def _get_configurable_fields_for_custom(rule_type: str, config: dict) -> list[di
         fields.append({"key": "max_length", "label": "最大长度", "type": "number", "default": config.get("max_length", 999999)})
     elif rule_type == "regex":
         fields.append({"key": "pattern", "label": "正则表达式", "type": "text", "default": config.get("pattern", "")})
+    elif rule_type == "threshold":
+        fields.append({"key": "metric", "label": "检测指标", "type": "text", "default": config.get("metric", "char_ratio")})
+        fields.append({"key": "operator", "label": "比较运算符", "type": "text", "default": config.get("operator", "gt")})
+        fields.append({"key": "threshold", "label": "阈值", "type": "number", "default": config.get("threshold", 0)})
+    elif rule_type == "python":
+        fields.append({"key": "code", "label": "Python 代码", "type": "text", "default": config.get("code", "")})
+        fields.append({"key": "timeout", "label": "超时(秒)", "type": "number", "default": config.get("timeout", 10)})
+    elif rule_type == "sql":
+        fields.append({"key": "sql", "label": "SQL 查询", "type": "text", "default": config.get("sql", "")})
+        fields.append({"key": "operator", "label": "比较运算符", "type": "text", "default": config.get("operator", "gt")})
+        fields.append({"key": "threshold", "label": "阈值", "type": "number", "default": config.get("threshold", 0)})
     return fields

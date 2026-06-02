@@ -209,8 +209,29 @@ def build_input_args(
             key_list = [str(min_len), str(max_len)]
             eval_config = EvaluatorRuleArgs(key_list=key_list)
             evals.append(EvalPiplineConfig(name="RuleWordNumber", config=eval_config))
+        elif rule_type == "threshold":
+            metric_params = rule_config.get("metric_params", {})
+            eval_config = EvaluatorRuleArgs(
+                threshold=rule_config.get("threshold", 0),
+                pattern=metric_params.get("pattern"),
+                key_list=metric_params.get("key_list"),
+                parameters={
+                    "metric": rule_config.get("metric", "char_ratio"),
+                    "operator": rule_config.get("operator", "gt"),
+                    "metric_params": metric_params,
+                    "threshold_max": rule_config.get("threshold_max"),
+                }
+            )
+            evals.append(EvalPiplineConfig(name="RuleThresholdCheck", config=eval_config))
+        elif rule_type == "python":
+            eval_config = EvaluatorRuleArgs(
+                parameters={
+                    "code": rule_config.get("code", ""),
+                    "timeout": rule_config.get("timeout", 10),
+                }
+            )
+            evals.append(EvalPiplineConfig(name="RuleCustomPython", config=eval_config))
 
-    # 构建字段映射：将 target_field 映射到 evaluator 的 content 字段
     if field_mapping:
         evaluator = [EvalPipline(fields=field_mapping, evals=evals)]
     else:
@@ -293,8 +314,11 @@ async def run_evaluation_task(
         # 设置环境变量，强制使用线程模式而不是多进程，确保类型转换正确生效
         os.environ["LOCAL_DEPLOYMENT_MODE"] = "true"
         
+        sql_rules = [rc for rc in rule_configs if rc.get("rule_type") == "sql"]
+        text_rule_configs = [rc for rc in rule_configs if rc.get("rule_type") != "sql"]
+
         input_args = build_input_args(
-            datasource_config, rule_configs, task_name, field_mapping, sampling
+            datasource_config, text_rule_configs, task_name, field_mapping, sampling
         )
 
         input_args_file = os.path.join(DEBUG_DIR, f"task_{task_id}_input_args_{timestamp}.json")
@@ -332,6 +356,13 @@ async def run_evaluation_task(
                 pass
 
         result = await loop.run_in_executor(None, _execute)
+
+        sql_results = []
+        if sql_rules:
+            try:
+                sql_results = await _execute_sql_rules(task_id, datasource_config, sql_rules)
+            except Exception as e:
+                print(f"[ENGINE ERROR] SQL 规则执行失败: {e}")
 
         _task_store[task_id] = {
             "status": "completed",
@@ -406,3 +437,83 @@ def get_bad_data(task_id: int, task_name: str, summary: dict = None) -> list[dic
                 continue
 
     return bad_data
+
+
+async def _execute_sql_rules(task_id: int, datasource_config: dict, sql_rules: list) -> list:
+    results = []
+    ds_type = datasource_config.get("type", "local_file")
+    ds_config = datasource_config.get("config", {})
+    table_name = datasource_config.get("table", "")
+
+    if ds_type == "local_file":
+        return [{"rule_name": rc.get("name", ""), "passed": True, "reason": "本地文件数据源不支持 SQL 规则", "value": None} for rc in sql_rules]
+
+    try:
+        from sqlalchemy import create_engine, text as sql_text
+        dialect_map = {"mysql": "mysql+pymysql", "postgresql": "postgresql+psycopg2", "oracle": "oracle+cx_oracle", "sqlserver": "mssql+pyodbc", "sqlite": "sqlite"}
+        driver_map = {"mysql": "pymysql", "postgresql": "psycopg2", "oracle": "cx_oracle", "sqlserver": "pyodbc", "sqlite": ""}
+        dialect = dialect_map.get(ds_type, ds_type)
+        password_part = f":{ds_config.get('password', '')}" if ds_config.get("password") else ""
+        port_part = f":{ds_config.get('port', '')}" if ds_config.get("port") else ""
+
+        if ds_type == "sqlite":
+            url = f"sqlite:///{ds_config.get('database', '')}"
+        else:
+            url = f"{dialect}://{ds_config.get('username', '')}{password_part}@{ds_config.get('host', '')}{port_part}/{ds_config.get('database', '')}"
+            if ds_config.get("connect_args"):
+                args = ds_config["connect_args"]
+                if not args.startswith("?"):
+                    args = f"?{args}"
+                url = f"{url}{args}"
+
+        engine = create_engine(url)
+        quote = "`" if ds_type == "mysql" else '"'
+
+        for rc in sql_rules:
+            rule_config = rc.get("config", {})
+            sql = rule_config.get("sql", "")
+            if table_name:
+                sql = sql.replace("{table}", f"{quote}{table_name}{quote}")
+            operator = rule_config.get("operator", "gt")
+            threshold = rule_config.get("threshold", 0)
+            value_column = rule_config.get("value_column", "cnt")
+            is_percentage = rule_config.get("is_percentage", False)
+
+            try:
+                with engine.connect() as conn:
+                    result = conn.execute(sql_text(sql))
+                    row = result.fetchone()
+                    if row is None:
+                        results.append({"rule_name": rc.get("name", ""), "passed": True, "reason": "SQL 查询无结果", "value": None})
+                        continue
+
+                    row_dict = dict(row._mapping)
+                    value = row_dict.get(value_column, row_dict.get(list(row_dict.keys())[0], 0))
+                    if value is None:
+                        value = 0
+
+                    if is_percentage:
+                        total_result = conn.execute(sql_text(f"SELECT COUNT(*) FROM {quote}{table_name}{quote}"))
+                        total_row = total_result.fetchone()
+                        total = total_row[0] if total_row else 1
+                        value = float(value) / total if total > 0 else 0.0
+
+                    ops = {"gt": lambda v, t: v > t, "lt": lambda v, t: v < t, "gte": lambda v, t: v >= t, "lte": lambda v, t: v <= t, "eq": lambda v, t: v == t}
+                    is_bad = ops.get(operator, ops["gt"])(value, threshold)
+
+                    results.append({
+                        "rule_name": rc.get("name", ""),
+                        "passed": not is_bad,
+                        "reason": f"SQL查询值={value}, {operator} {threshold}" if is_bad else "通过",
+                        "value": value,
+                        "sql": sql,
+                    })
+            except Exception as e:
+                results.append({"rule_name": rc.get("name", ""), "passed": True, "reason": f"SQL执行错误: {str(e)}", "value": None})
+
+        engine.dispose()
+    except Exception as e:
+        for rc in sql_rules:
+            results.append({"rule_name": rc.get("name", ""), "passed": True, "reason": f"数据库连接错误: {str(e)}", "value": None})
+
+    return results
